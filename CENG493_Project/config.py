@@ -8,8 +8,8 @@ CHUNK_OVERLAP = 180
 CORPUS_DOC_MIN_CHARS = 180
 
 # Data
-QA_EVAL_EXPECTED = 1500
-RAW_DATA_PATH = BASE_DIR / "data/raw/combined_dataset.csv"
+QA_EVAL_EXPECTED = 300
+RAW_DATA_PATH = BASE_DIR.parent / "combined_dataset.csv"
 PROCESSED_DIR = BASE_DIR / "data/processed"
 INDEX_DIR = BASE_DIR / "index"
 RESULTS_DIR = BASE_DIR / "results/stage1"

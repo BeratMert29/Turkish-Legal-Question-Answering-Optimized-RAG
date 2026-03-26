@@ -19,7 +19,7 @@ def _classify_result(result: dict) -> str:
         return "miss"
 
 
-def stratified_sample(results: list[dict], sample_size: int = config.HALLUCINATION_SAMPLE_SIZE) -> dict:
+def stratified_sample(results: list[dict], sample_size: int = config.HALLUCINATION_SAMPLE_SIZE, seed: int = 42) -> dict:
     """
     Stratify results into hits/partial/misses and sample up to sample_size//3 from each.
     Compensates if a category is smaller than target.
@@ -35,17 +35,18 @@ def stratified_sample(results: list[dict], sample_size: int = config.HALLUCINATI
         else:
             misses.append(r)
 
+    rng = random.Random(seed)
     target = sample_size // 3
-    h = random.sample(hits, min(target, len(hits)))
-    p = random.sample(partial, min(target, len(partial)))
-    m = random.sample(misses, min(target, len(misses)))
+    h = rng.sample(hits, min(target, len(hits)))
+    p = rng.sample(partial, min(target, len(partial)))
+    m = rng.sample(misses, min(target, len(misses)))
 
     # Compensate: if a category is short, pull from others
     total = len(h) + len(p) + len(m)
     if total < sample_size:
         sampled_ids = {r.get("query_id") for r in h + p + m}
         pool = [x for x in hits + partial + misses if x.get("query_id") not in sampled_ids]
-        extra = random.sample(pool, min(sample_size - total, len(pool)))
+        extra = rng.sample(pool, min(sample_size - total, len(pool)))
         # distribute extra evenly across h, p, m
         for i, item in enumerate(extra):
             if i % 3 == 0:
@@ -70,7 +71,16 @@ def evaluate_faithfulness(answer: str, context: str, nli_model) -> dict:
     # Softmax to get probabilities
     exp_logits = np.exp(logit_vec - np.max(logit_vec))  # numerically stable
     probs = exp_logits / exp_logits.sum()
-    entailment_prob = float(probs[2])  # index 2 = entailment
+    # Dynamically find entailment label index
+    id2label = getattr(getattr(nli_model, 'config', None), 'id2label', None)
+    if id2label:
+        entailment_idx = next(
+            (int(k) for k, v in id2label.items() if v.lower() == 'entailment'),
+            1  # fallback: index 1 for nli-deberta-v3-small
+        )
+    else:
+        entailment_idx = 1  # safe default for cross-encoder/nli-deberta-v3-small
+    entailment_prob = float(probs[entailment_idx])
     return {"faithful": entailment_prob >= 0.5, "score": entailment_prob}
 
 

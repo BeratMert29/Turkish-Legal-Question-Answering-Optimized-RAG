@@ -41,7 +41,12 @@ class RAGPipeline:
             for i, chunk in enumerate(selected)
         ]
         context = "".join(parts)
-        return context[:self.context_window_chars]
+        truncated = context[:self.context_window_chars]
+        # Snap back to last chunk boundary to avoid mid-sentence truncation
+        last_boundary = truncated.rfind('\n\n')
+        if last_boundary > 0:
+            truncated = truncated[:last_boundary]
+        return truncated
 
     def generate(self, question: str, context: str) -> str:
         """Generate answer via Ollama LLM."""
@@ -54,6 +59,8 @@ class RAGPipeline:
                 {"role": "user", "content": f"Bağlam:\n{context}\n\nSoru: {question}"},
             ],
         )
+        if not response.choices:
+            raise ValueError("LLM returned empty choices list")
         content = response.choices[0].message.content
         if not content:
             raise ValueError("LLM returned empty response")

@@ -47,7 +47,12 @@ def compute_query_metrics(result: dict) -> dict:
 
 def compute_all_metrics(results: list[dict]) -> dict:
     if not results:
-        return {"recall@5": 0.0, "recall@10": 0.0, "mrr": 0.0, "ndcg@10": 0.0, "num_queries": 0}
-    per_query = [compute_query_metrics(r) for r in results]
+        return {"recall@5": 0.0, "recall@10": 0.0, "mrr": 0.0, "ndcg@10": 0.0, "num_queries": 0, "num_unjudged": 0}
+    total = len(results)
+    judged = [r for r in results if len(r["relevant"]) > 0]
+    num_unjudged = total - len(judged)
     keys = ["recall@5", "recall@10", "mrr", "ndcg@10"]
-    return {k: sum(q[k] for q in per_query) / len(per_query) for k in keys} | {"num_queries": len(results)}
+    if not judged:
+        return {"recall@5": 0.0, "recall@10": 0.0, "mrr": 0.0, "ndcg@10": 0.0, "num_queries": 0, "num_unjudged": total}
+    per_query = [compute_query_metrics(r) for r in judged]
+    return {k: sum(q[k] for q in per_query) / len(per_query) for k in keys} | {"num_queries": len(judged), "num_unjudged": num_unjudged}

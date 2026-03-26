@@ -81,3 +81,30 @@ def compute_all_qa_metrics(predictions: list[dict]) -> dict:
     metrics = [compute_qa_metrics(p["predicted"], p["expected"]) for p in predictions]
     keys = ["em", "f1", "bleu", "rouge_l"]
     return {k: sum(m[k] for m in metrics) / len(metrics) for k in keys} | {"num_samples": len(predictions)}
+
+
+def citation_accuracy(retrieved_sources: list[str], expected_source: str) -> float:
+    """Returns 1.0 if expected_source appears in any of the retrieved sources, else 0.0."""
+    return 1.0 if any(expected_source in s or s in expected_source for s in retrieved_sources) else 0.0
+
+
+def compute_all_qa_metrics_with_citation(predictions: list[dict]) -> dict:
+    """
+    predictions: list of {"predicted": str, "expected": str,
+                           "retrieved_sources": list[str], "expected_source": str}
+    Returns: averaged em, f1, bleu, rouge_l, citation_accuracy, num_samples
+    """
+    if not predictions:
+        return {"em": 0.0, "f1": 0.0, "bleu": 0.0, "rouge_l": 0.0,
+                "citation_accuracy": 0.0, "num_samples": 0}
+    qa_metrics = [compute_qa_metrics(p["predicted"], p["expected"]) for p in predictions]
+    cite_scores = [
+        citation_accuracy(p.get("retrieved_sources", []), p.get("expected_source", ""))
+        for p in predictions
+    ]
+    n = len(predictions)
+    keys = ["em", "f1", "bleu", "rouge_l"]
+    result = {k: sum(m[k] for m in qa_metrics) / n for k in keys}
+    result["citation_accuracy"] = sum(cite_scores) / n
+    result["num_samples"] = n
+    return result
