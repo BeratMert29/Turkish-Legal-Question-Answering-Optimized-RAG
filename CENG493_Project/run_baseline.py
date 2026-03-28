@@ -2,12 +2,16 @@
 Stage 1 Baseline Runner
 Usage:
     python run_baseline.py --build-index --eval
+    python run_baseline.py --retrieval-only
+    python run_baseline.py --hybrid --retrieval-only
+    python run_baseline.py --rerank --retrieval-only
     python run_baseline.py --eval --results-dir results/stage1
 """
 
 import argparse
 import json
 import logging
+import time
 import sys
 from pathlib import Path
 
@@ -29,7 +33,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 
-def build_index(processor: DataProcessor, embedder: Embedder, chunks: list[CorpusChunk] = None) -> Retriever:
+def build_index(processor: DataProcessor, embedder: Embedder, chunks: list[CorpusChunk] = None) -> tuple[Retriever, float]:
     if chunks is None:
         log.info("Building corpus chunks …")
         chunks = list(processor.build_corpus_chunks())
@@ -43,13 +47,15 @@ def build_index(processor: DataProcessor, embedder: Embedder, chunks: list[Corpu
 
     retriever = Retriever(embedder)
     log.info("Encoding corpus (this may take a while) …")
+    t0 = time.time()
     retriever.build_index(texts, metadata)
+    build_time = round(time.time() - t0, 2)
 
     index_path = config.INDEX_DIR / config.INDEX_FILE
     meta_path = config.INDEX_DIR / config.METADATA_FILE
     retriever.save_index(index_path, meta_path)
-    log.info("Index saved → %s", index_path)
-    return retriever
+    log.info("Index saved → %s (%.1fs)", index_path, build_time)
+    return retriever, build_time
 
 
 def load_index(embedder: Embedder) -> Retriever:
@@ -65,15 +71,36 @@ def run_retrieval_eval(
     retriever: Retriever,
     qa_examples: list[QAExample],
     corpus_chunks: list[CorpusChunk],
-) -> dict:
-    log.info("Building ground-truth relevance map (semantic) …")
-    relevant_map = DataProcessor.build_relevant_chunk_map(
-        corpus_chunks, qa_examples, retriever=retriever,
-    )
+    use_hybrid: bool = False,
+    use_rerank: bool = False,
+    bm25_index=None,
+) -> tuple[dict, list[dict]]:
+    log.info("Building ground-truth relevance map …")
+    relevant_map = DataProcessor.build_relevant_chunk_map(corpus_chunks, qa_examples)
 
-    log.info("Running retrieval on %d queries …", len(qa_examples))
     questions = [qa.question for qa in qa_examples]
-    all_retrieved = retriever.batch_retrieve(questions, top_k=config.TOP_K_RETRIEVAL)
+
+    if use_hybrid and bm25_index is not None:
+        log.info("Running HYBRID retrieval on %d queries …", len(qa_examples))
+        t0 = time.time()
+        all_retrieved = retriever.batch_hybrid_retrieve(
+            questions, bm25_index, top_k=config.TOP_K_RETRIEVAL
+        )
+    elif use_rerank:
+        log.info("Running DENSE+RERANK retrieval on %d queries …", len(qa_examples))
+        from retrieval.reranker import Reranker
+        reranker = Reranker()
+        reranker.load_model()
+        t0 = time.time()
+        candidates = retriever.batch_retrieve(questions, top_k=config.RERANKER_CANDIDATES)
+        all_retrieved = reranker.batch_rerank(questions, candidates, top_k=config.TOP_K_RETRIEVAL)
+    else:
+        log.info("Running DENSE retrieval on %d queries …", len(qa_examples))
+        t0 = time.time()
+        all_retrieved = retriever.batch_retrieve(questions, top_k=config.TOP_K_RETRIEVAL)
+
+    retrieval_time = round(time.time() - t0, 2)
+    log.info("  Retrieval done in %.1fs", retrieval_time)
 
     results = []
     for qa, retrieved_chunks in zip(qa_examples, all_retrieved):
@@ -85,6 +112,7 @@ def run_retrieval_eval(
         })
 
     metrics = compute_all_metrics(results)
+    metrics["retrieval_time_s"] = retrieval_time
     log.info("Retrieval metrics: %s", metrics)
     return metrics, results
 
@@ -92,15 +120,30 @@ def run_retrieval_eval(
 def run_generation_eval(
     pipeline: RAGPipeline,
     qa_examples: list[QAExample],
+    use_hybrid: bool = False,
+    use_rerank: bool = False,
+    bm25_index=None,
 ) -> tuple[dict, list[dict]]:
     log.info("Batch-retrieving %d queries …", len(qa_examples))
     questions = [qa.question for qa in qa_examples]
-    all_retrieved = pipeline.retriever.batch_retrieve(questions, top_k=config.TOP_K_RETRIEVAL)
+
+    if use_hybrid and bm25_index is not None:
+        all_retrieved = pipeline.retriever.batch_hybrid_retrieve(
+            questions, bm25_index, top_k=config.TOP_K_RETRIEVAL
+        )
+    elif use_rerank:
+        from retrieval.reranker import Reranker
+        reranker = Reranker()
+        reranker.load_model()
+        candidates = pipeline.retriever.batch_retrieve(questions, top_k=config.RERANKER_CANDIDATES)
+        all_retrieved = reranker.batch_rerank(questions, candidates, top_k=config.TOP_K_RETRIEVAL)
+    else:
+        all_retrieved = pipeline.retriever.batch_retrieve(questions, top_k=config.TOP_K_RETRIEVAL)
 
     log.info("Running generation on %d examples …", len(qa_examples))
     predictions = []
     from tqdm import tqdm
-    for i, (qa, retrieved_chunks) in enumerate(tqdm(zip(qa_examples, all_retrieved), total=len(qa_examples), desc="Generating")):
+    for qa, retrieved_chunks in tqdm(zip(qa_examples, all_retrieved), total=len(qa_examples), desc="Generating"):
         try:
             context_used, context_chunks = pipeline.assemble_context(retrieved_chunks)
             answer = pipeline.generate(qa.question, context_used)
@@ -137,7 +180,6 @@ def run_hallucination_eval(predictions: list[dict]) -> dict:
         log.warning("NLI model unavailable (%s); skipping hallucination analysis", exc)
         return {"summary": {"faithful_rate": None, "skipped": True}, "per_sample": []}
 
-    # Build sample_dict format expected by run_hallucination_analysis
     retrieval_results_dict = {
         p["query_id"]: p.get("retrieved_chunks", [])
         for p in predictions
@@ -172,9 +214,16 @@ def main() -> None:
                         help="Run retrieval + generation + hallucination evaluation")
     parser.add_argument("--retrieval-only", action="store_true",
                         help="Run only retrieval metrics (no LLM required)")
+    parser.add_argument("--hybrid", action="store_true",
+                        help="Use BM25+dense hybrid retrieval instead of dense-only")
+    parser.add_argument("--rerank", action="store_true",
+                        help="Apply cross-encoder reranker after dense retrieval")
     parser.add_argument("--results-dir", type=Path, default=config.RESULTS_DIR,
                         help="Directory to write baseline_metrics.json")
     args = parser.parse_args()
+
+    if args.hybrid and args.rerank:
+        parser.error("--hybrid and --rerank are mutually exclusive")
 
     set_seeds(42)
 
@@ -189,8 +238,9 @@ def main() -> None:
     log.info("Building corpus chunks for reuse …")
     corpus_chunks: list[CorpusChunk] = list(processor.build_corpus_chunks())
 
+    index_build_time: float | None = None
     if args.build_index:
-        retriever = build_index(processor, embedder, chunks=corpus_chunks)
+        retriever, index_build_time = build_index(processor, embedder, chunks=corpus_chunks)
     else:
         retriever = load_index(embedder)
 
@@ -198,28 +248,46 @@ def main() -> None:
         log.info("--eval not specified; exiting after index step.")
         return
 
+    # BM25 index (built once, used for hybrid retrieval)
+    bm25_index = None
+    if args.hybrid:
+        from retrieval.bm25_retriever import BM25Index
+        log.info("Building BM25 index over %d chunks …", len(corpus_chunks))
+        bm25_index = BM25Index()
+        bm25_index.build([{"text": c.text, "chunk_id": c.chunk_id} for c in corpus_chunks])
+
     qa_examples: list[QAExample] = processor.build_qa_eval_set()
-    # corpus_chunks already built above — no second call needed
+
+    # Determine retrieval mode label
+    if args.hybrid:
+        retrieval_mode = "hybrid_bm25_dense"
+    elif args.rerank:
+        retrieval_mode = "dense_rerank"
+    else:
+        retrieval_mode = "dense"
 
     # --- Retrieval metrics ---
-    retrieval_metrics, retrieval_results = run_retrieval_eval(retriever, qa_examples, corpus_chunks)
+    retrieval_metrics, retrieval_results = run_retrieval_eval(
+        retriever, qa_examples, corpus_chunks,
+        use_hybrid=args.hybrid, use_rerank=args.rerank, bm25_index=bm25_index,
+    )
 
     qa_metrics: dict = {}
     hallucination: dict = {}
 
     if args.eval:
-        # --- Ollama connectivity check ---
         if not check_ollama(config.LLM_BASE_URL, config.LLM_MODEL):
             log.warning(
-                "Ollama not reachable at %s — skipping generation eval",
-                config.LLM_BASE_URL,
+                "Ollama not reachable at %s — skipping generation eval. "
+                "Start Ollama and run: ollama pull %s",
+                config.LLM_BASE_URL, config.LLM_MODEL,
             )
         else:
-            # --- Generation + QA metrics ---
             pipeline = RAGPipeline(retriever)
-            qa_metrics, predictions = run_generation_eval(pipeline, qa_examples)
-
-            # --- Hallucination analysis ---
+            qa_metrics, predictions = run_generation_eval(
+                pipeline, qa_examples,
+                use_hybrid=args.hybrid, use_rerank=args.rerank, bm25_index=bm25_index,
+            )
             hallucination = run_hallucination_eval(predictions)
     else:
         log.info("Skipping generation/hallucination (--retrieval-only mode).")
@@ -236,6 +304,9 @@ def main() -> None:
             "llm_temperature": config.LLM_TEMPERATURE,
             "llm_max_tokens": config.LLM_MAX_TOKENS,
             "hallucination_sample_size": config.HALLUCINATION_SAMPLE_SIZE,
+            "retrieval_mode": retrieval_mode,
+            "device": embedder.device,
+            "index_build_time_s": index_build_time,
         },
         "retrieval_metrics": retrieval_metrics,
         "qa_metrics": qa_metrics,

@@ -1,26 +1,19 @@
-"""Evaluate retrieval quality using embedding-based oracle relevance + BM25 hybrid."""
+"""Evaluate retrieval quality using context-hash ground truth + BM25 hybrid."""
 import json
 import time
 import sys
-import numpy as np
 from pathlib import Path
+
 _project_root = str(Path(__file__).parent.parent)
 if _project_root not in sys.path:
     sys.path.append(_project_root)
+
 import config
 from data.data_processor import DataProcessor
 from retrieval.embedder import Embedder
 from retrieval.retriever import Retriever
 from retrieval.bm25_retriever import BM25Index
 from evaluation.retrieval_metrics import compute_all_metrics
-
-ORACLE_NOTE = (
-    "Oracle relevance: for each query the top-5 corpus chunks most similar "
-    "to the answer embedding are marked relevant. Answer texts encoded as "
-    "passages (is_query=False). Corpus vectors reconstructed from FAISS via "
-    "reconstruct_n. Relative top-K avoids absolute threshold issues caused by "
-    "domain clustering (all Turkish legal text has cosine sim > 0.80)."
-)
 
 
 def main():
@@ -37,47 +30,37 @@ def main():
     n_corpus = retriever.index.ntotal
     print(f"  Index loaded: {n_corpus} vectors")
 
-    # ── Load eval set ───────────────────────────────────────────────────────
-    eval_path = config.PROCESSED_DIR / config.QA_GOLD_FILE
-    eval_set  = DataProcessor.load_jsonl(eval_path)
-    print(f"  Eval set: {len(eval_set)} examples")
+    # ── Load data via DataProcessor (same approach as run_baseline.py) ──────
+    print(f"\nLoading data from {config.RAW_DATA_PATH}")
+    processor = DataProcessor(config.RAW_DATA_PATH)
+    processor.load_and_validate()
+    corpus_chunks = list(processor.build_corpus_chunks())
+    qa_examples   = processor.build_qa_eval_set()
+    print(f"  Corpus chunks: {len(corpus_chunks)}")
+    print(f"  QA examples:   {len(qa_examples)}")
 
-    # ── Reconstruct corpus vectors from FAISS (N x 1024) ───────────────────
-    print(f"\nReconstructing {n_corpus} corpus vectors from FAISS index...")
-    t0 = time.time()
-    corpus_embs  = np.array(retriever.index.reconstruct_n(0, n_corpus), dtype=np.float32)
-    doc_ids_list = [meta['doc_id'] for meta in retriever.metadata]
-    print(f"  Done in {time.time()-t0:.1f}s  shape={corpus_embs.shape}")
+    # ── Build ground-truth relevance map ────────────────────────────────────
+    print("\nBuilding ground-truth relevance map (context-hash)...")
+    relevant_map = DataProcessor.build_relevant_chunk_map(corpus_chunks, qa_examples)
+    matched = sum(1 for v in relevant_map.values() if v)
+    print(f"  Queries with at least one relevant chunk: {matched}/{len(qa_examples)}")
 
-    # ── Encode all answers as passages ──────────────────────────────────────
-    answers = [e['answer'] for e in eval_set]
-    print(f"\nEncoding {len(answers)} answers as passages...")
-    t0 = time.time()
-    answer_embs = np.array(embedder.encode(answers, is_query=False), dtype=np.float32)
-    print(f"  Done in {time.time()-t0:.1f}s  shape={answer_embs.shape}")
-
-    # ── Cosine similarity matrix (Q x N) ────────────────────────────────────
-    print("\nComputing answer×corpus similarity matrix...")
-    t0 = time.time()
-    sim_matrix = answer_embs @ corpus_embs.T          # (Q, N)
-    print(f"  Done in {time.time()-t0:.1f}s")
-
-    questions = [e['question'] for e in eval_set]
+    questions = [qa.question for qa in qa_examples]
 
     # ── Dense retrieval ──────────────────────────────────────────────────────
-    print(f"\nDense retrieval for {len(eval_set)} queries...")
+    print(f"\nDense retrieval for {len(qa_examples)} queries...")
     t0 = time.time()
     all_dense = retriever.batch_retrieve(questions, top_k=config.TOP_K_RETRIEVAL)
     print(f"  Done in {time.time()-t0:.1f}s")
 
     # ── BM25 index + hybrid retrieval ───────────────────────────────────────
-    print(f"\nBuilding BM25 index over {n_corpus} chunks...")
+    print(f"\nBuilding BM25 index over {len(corpus_chunks)} chunks...")
     t0 = time.time()
     bm25_index = BM25Index()
-    bm25_index.build(retriever.metadata)
+    bm25_index.build([{"text": c.text, "chunk_id": c.chunk_id} for c in corpus_chunks])
     print(f"  Done in {time.time()-t0:.1f}s")
 
-    print(f"\nHybrid retrieval for {len(eval_set)} queries (alpha=0.7)...")
+    print(f"\nHybrid retrieval for {len(qa_examples)} queries (alpha=0.7)...")
     t0 = time.time()
     all_hybrid = retriever.batch_hybrid_retrieve(
         questions, bm25_index, alpha=0.7, top_k=config.TOP_K_RETRIEVAL
@@ -86,19 +69,22 @@ def main():
 
     # ── Build metric results ─────────────────────────────────────────────────
     def build_results(all_retrieved):
-        metric_results, full_results = [], {}
-        for i, (example, chunks) in enumerate(zip(eval_set, all_retrieved)):
-            qid  = example['query_id']
-            sims = sim_matrix[i]
-            top_idx = np.argsort(sims)[::-1][:config.TOP_K_ORACLE]
-            relevant = [doc_ids_list[j] for j in top_idx]
-            seen, retrieved_doc_ids = set(), []
+        metric_results = []
+        full_results   = {}
+        for qa, chunks in zip(qa_examples, all_retrieved):
+            retrieved_chunk_ids = []
+            seen: set[str] = set()
             for c in chunks:
-                if c['doc_id'] not in seen:
-                    seen.add(c['doc_id'])
-                    retrieved_doc_ids.append(c['doc_id'])
-            metric_results.append({"query_id": qid, "relevant": relevant, "retrieved": retrieved_doc_ids})
-            full_results[qid] = chunks
+                cid = c["chunk_id"]
+                if cid not in seen:
+                    seen.add(cid)
+                    retrieved_chunk_ids.append(cid)
+            metric_results.append({
+                "query_id":  qa.query_id,
+                "relevant":  relevant_map.get(qa.query_id, []),
+                "retrieved": retrieved_chunk_ids,
+            })
+            full_results[qa.query_id] = chunks
         return metric_results, full_results
 
     dense_results,  dense_full  = build_results(all_dense)
@@ -125,10 +111,9 @@ def main():
 
     # ── Save ─────────────────────────────────────────────────────────────────
     out = {
-        "metrics":        dense_metrics,          # legacy key for script 05
-        "hybrid_metrics": hybrid_metrics,
+        "metrics":           dense_metrics,    # legacy key for script 05
+        "hybrid_metrics":    hybrid_metrics,
         "per_query_results": dense_results,
-        "oracle_relevance_note": ORACLE_NOTE,
     }
     results_path = config.RESULTS_DIR / "retrieval_results.json"
     with open(results_path, "w", encoding="utf-8") as f:
@@ -145,7 +130,7 @@ def main():
         json.dump(hybrid_full, f, ensure_ascii=False)
     print(f"  Saved: {hybrid_full_path}")
 
-    print("\n✓ Retrieval evaluation complete")
+    print("\nRetrieval evaluation complete")
 
 
 if __name__ == '__main__':
