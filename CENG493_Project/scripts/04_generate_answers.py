@@ -63,8 +63,8 @@ def main():
     remaining = eval_set[already_done:]
 
     # Load retriever
-    index_path = config.INDEX_DIR / "faiss_index.bin"
-    metadata_path = config.INDEX_DIR / "chunk_metadata.jsonl"
+    index_path = config.INDEX_DIR / config.INDEX_FILE
+    metadata_path = config.INDEX_DIR / config.METADATA_FILE
     print("Loading embedding model and index...")
     embedder = Embedder()
     embedder.load_model()
@@ -85,15 +85,15 @@ def main():
         for i, (example, retrieved_chunks) in enumerate(tqdm(zip(remaining, all_retrieved), total=len(remaining), desc="Generating answers")):
             global_i = already_done + i + 1
             try:
-                context_used = pipeline.assemble_context(retrieved_chunks)
+                context_used, context_chunks = pipeline.assemble_context(retrieved_chunks)
                 answer = pipeline.generate(example['question'], context_used)
                 record = {
                     "query_id": example['query_id'],
                     "question": example['question'],
                     "predicted": answer,
                     "expected": example['answer'],
-                    "sources": [c['source'] for c in retrieved_chunks],
-                    "retrieved_chunks": retrieved_chunks,
+                    "sources": [c['source'] for c in context_chunks],
+                    "retrieved_chunks": [dict(c) for c in context_chunks],
                 }
             except Exception as e:
                 record = {
