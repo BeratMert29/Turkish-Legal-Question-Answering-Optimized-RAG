@@ -3,6 +3,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from tqdm import tqdm
 _project_root = str(Path(__file__).parent.parent)
 if _project_root not in sys.path:
     sys.path.append(_project_root)
@@ -81,7 +82,7 @@ def main():
     print(f"Generating {len(remaining)} answers...")
 
     with open(predictions_path, "a", encoding="utf-8") as f:
-        for i, (example, retrieved_chunks) in enumerate(zip(remaining, all_retrieved)):
+        for i, (example, retrieved_chunks) in enumerate(tqdm(zip(remaining, all_retrieved), total=len(remaining), desc="Generating answers")):
             global_i = already_done + i + 1
             try:
                 context_used = pipeline.assemble_context(retrieved_chunks)
@@ -108,9 +109,6 @@ def main():
 
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
             f.flush()
-
-            if global_i % 50 == 0:
-                print(f"Progress: {global_i}/{len(eval_set)} saved to {predictions_path}")
 
     total = already_done + len(remaining)
     print(f"\n✓ Generation complete. {total} predictions written to {predictions_path}")

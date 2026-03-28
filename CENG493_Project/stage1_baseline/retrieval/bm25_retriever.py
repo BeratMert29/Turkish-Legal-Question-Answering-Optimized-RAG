@@ -1,16 +1,22 @@
 """BM25 retrieval for hybrid dense+sparse search."""
-import unicodedata
 import numpy as np
 from rank_bm25 import BM25Okapi
+from utils import normalize_turkish
+import config
 
-
-def normalize_turkish(text: str) -> str:
-    text = text.replace('İ', 'i').replace('I', 'ı')
-    return unicodedata.normalize('NFC', text).lower()
+import nltk
+try:
+    _STOPWORDS = set(nltk.corpus.stopwords.words('turkish'))
+except LookupError:
+    nltk.download('stopwords', quiet=True)
+    try:
+        _STOPWORDS = set(nltk.corpus.stopwords.words('turkish'))
+    except Exception:
+        _STOPWORDS = set()
 
 
 def tokenize(text: str) -> list[str]:
-    return [w for w in normalize_turkish(text).split() if len(w) >= 2]
+    return [w for w in normalize_turkish(text).split() if len(w) >= config.BM25_MIN_TOKEN_LENGTH and w not in _STOPWORDS]
 
 
 class BM25Index:

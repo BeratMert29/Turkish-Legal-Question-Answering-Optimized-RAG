@@ -45,8 +45,8 @@ def main():
     print(f"  Index vectors: {retriever.index.ntotal}")
 
     # Save
-    index_path = config.INDEX_DIR / "faiss_index.bin"
-    metadata_path = config.INDEX_DIR / "chunk_metadata.jsonl"
+    index_path = config.INDEX_DIR / config.INDEX_FILE
+    metadata_path = config.INDEX_DIR / config.METADATA_FILE
     retriever.save_index(index_path, metadata_path)
     print(f"\n  Index saved: {index_path}")
     print(f"  Metadata saved: {metadata_path}")

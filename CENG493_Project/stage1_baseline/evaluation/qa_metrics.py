@@ -1,28 +1,13 @@
-import unicodedata
 from collections import Counter
-import nltk
-from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-from rouge_score import rouge_scorer
+import evaluate as hf_evaluate
+from utils import normalize_turkish
 
-# Download punkt tokenizer if needed
 try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt', quiet=True)
-
-_ROUGE_SCORER = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=False)
-
-
-def normalize_turkish(text: str) -> str:
-    """
-    Turkish-aware normalization.
-    CRITICAL: must replace 'I' → 'ı' and 'İ' → 'i' BEFORE calling .lower(),
-    because Python's .lower() maps 'I' → 'i' (not Turkish dotless 'ı').
-    """
-    text = text.replace('İ', 'i').replace('I', 'ı')
-    text = text.lower()
-    text = unicodedata.normalize('NFC', text)
-    return text
+    _BLEU_METRIC = hf_evaluate.load("bleu")
+    _ROUGE_METRIC = hf_evaluate.load("rouge")
+    _USE_HF_EVALUATE = True
+except Exception:
+    _USE_HF_EVALUATE = False
 
 
 def exact_match(predicted: str, expected: str) -> float:
@@ -47,19 +32,30 @@ def token_f1(predicted: str, expected: str) -> float:
 
 
 def bleu_score(predicted: str, expected: str) -> float:
-    pred_tokens = normalize_turkish(predicted).split()
-    ref_tokens = normalize_turkish(expected).split()
-    if not pred_tokens or not ref_tokens:
+    pred_norm = normalize_turkish(predicted)
+    ref_norm = normalize_turkish(expected)
+    if not pred_norm or not ref_norm:
         return 0.0
-    smoothing = SmoothingFunction().method1
-    return sentence_bleu([ref_tokens], pred_tokens, smoothing_function=smoothing)
+    if _USE_HF_EVALUATE:
+        result = _BLEU_METRIC.compute(predictions=[pred_norm], references=[[ref_norm]])
+        return float(result["bleu"])
+    # fallback: simple unigram overlap
+    pred_tokens = set(pred_norm.split())
+    ref_tokens = set(ref_norm.split())
+    if not ref_tokens:
+        return 0.0
+    return len(pred_tokens & ref_tokens) / len(ref_tokens)
 
 
 def rouge_l_score(predicted: str, expected: str) -> float:
     pred_norm = normalize_turkish(predicted)
     exp_norm = normalize_turkish(expected)
-    scores = _ROUGE_SCORER.score(exp_norm, pred_norm)
-    return scores['rougeL'].fmeasure
+    if _USE_HF_EVALUATE:
+        result = _ROUGE_METRIC.compute(
+            predictions=[pred_norm], references=[exp_norm], rouge_types=["rougeL"]
+        )
+        return float(result["rougeL"])
+    return 0.0
 
 
 def compute_qa_metrics(predicted: str, expected: str) -> dict:
@@ -79,13 +75,31 @@ def compute_all_qa_metrics(predictions: list[dict]) -> dict:
     if not predictions:
         return {"em": 0.0, "f1": 0.0, "bleu": 0.0, "rouge_l": 0.0, "num_samples": 0}
     metrics = [compute_qa_metrics(p["predicted"], p["expected"]) for p in predictions]
-    keys = ["em", "f1", "bleu", "rouge_l"]
-    return {k: sum(m[k] for m in metrics) / len(metrics) for k in keys} | {"num_samples": len(predictions)}
+    keys = ["em", "f1", "rouge_l"]
+    result = {k: sum(m[k] for m in metrics) / len(metrics) for k in keys}
+    # Corpus-level BLEU via evaluate
+    if _USE_HF_EVALUATE:
+        preds_norm = [normalize_turkish(p["predicted"]) for p in predictions]
+        refs_norm = [[normalize_turkish(p["expected"])] for p in predictions]
+        bleu_result = _BLEU_METRIC.compute(predictions=preds_norm, references=refs_norm)
+        result["bleu"] = float(bleu_result["bleu"])
+    else:
+        result["bleu"] = sum(m["bleu"] for m in metrics) / len(metrics)
+    result["num_samples"] = len(predictions)
+    return result
 
 
 def citation_accuracy(retrieved_sources: list[str], expected_source: str) -> float:
-    """Returns 1.0 if expected_source appears in any of the retrieved sources, else 0.0."""
-    return 1.0 if any(expected_source in s or s in expected_source for s in retrieved_sources) else 0.0
+    """Returns 1.0 if expected_source matches any retrieved source (normalized exact match)."""
+    if not expected_source:
+        return 0.0
+    exp_norm = normalize_turkish(expected_source.strip())
+    for s in retrieved_sources:
+        if not s:
+            continue
+        if normalize_turkish(s.strip()) == exp_norm:
+            return 1.0
+    return 0.0
 
 
 def compute_all_qa_metrics_with_citation(predictions: list[dict]) -> dict:
@@ -103,8 +117,16 @@ def compute_all_qa_metrics_with_citation(predictions: list[dict]) -> dict:
         for p in predictions
     ]
     n = len(predictions)
-    keys = ["em", "f1", "bleu", "rouge_l"]
+    keys = ["em", "f1", "rouge_l"]
     result = {k: sum(m[k] for m in qa_metrics) / n for k in keys}
+    # Corpus-level BLEU via evaluate
+    if _USE_HF_EVALUATE:
+        preds_norm = [normalize_turkish(p["predicted"]) for p in predictions]
+        refs_norm = [[normalize_turkish(p["expected"])] for p in predictions]
+        bleu_result = _BLEU_METRIC.compute(predictions=preds_norm, references=refs_norm)
+        result["bleu"] = float(bleu_result["bleu"])
+    else:
+        result["bleu"] = sum(m["bleu"] for m in qa_metrics) / n
     result["citation_accuracy"] = sum(cite_scores) / n
     result["num_samples"] = n
     return result

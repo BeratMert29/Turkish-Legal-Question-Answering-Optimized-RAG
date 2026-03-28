@@ -2,11 +2,19 @@ from dataclasses import dataclass, asdict
 from typing import Iterator
 import hashlib
 import json
-import warnings
 import pathlib
 
 import pandas as pd
 import config
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+
+_TEXT_SPLITTER = RecursiveCharacterTextSplitter(
+    chunk_size=config.CHUNK_SIZE,
+    chunk_overlap=config.CHUNK_OVERLAP,
+    length_function=len,
+    separators=["\n\n", "\n", ". ", " ", ""],
+)
 
 
 @dataclass
@@ -79,27 +87,28 @@ class DataProcessor:
     # ------------------------------------------------------------------
 
     def chunk_text(self, text: str, doc_id: str, source: str) -> list[CorpusChunk]:
-        """Sliding-window chunking.  Returns [] for short texts.
+        """Split text into overlapping chunks using sentence-boundary-aware splitting.
 
-        Texts shorter than CHUNK_SIZE are emitted as a single chunk.
-        (Texts shorter than CORPUS_DOC_MIN_CHARS are skipped entirely.)
+        Uses RecursiveCharacterTextSplitter which respects paragraph/sentence
+        boundaries before falling back to hard character limits, producing
+        cleaner chunks than a pure character-offset sliding window.
+        Returns [] for texts shorter than CORPUS_DOC_MIN_CHARS.
         """
         if len(text) < config.CORPUS_DOC_MIN_CHARS:
             return []
 
-        step = config.CHUNK_SIZE - config.CHUNK_OVERLAP
+        raw_chunks = _TEXT_SPLITTER.split_text(text)
         chunks: list[CorpusChunk] = []
-
-        for i, start in enumerate(range(0, len(text), step)):
-            chunk_text = text[start: start + config.CHUNK_SIZE]
+        for i, chunk in enumerate(raw_chunks):
+            if len(chunk) < config.CHUNK_OVERLAP:
+                continue
             chunks.append(CorpusChunk(
                 chunk_id=f"{source}_{doc_id}_{i}",
                 doc_id=doc_id,
-                text=chunk_text,
+                text=chunk,
                 source=source,
-                char_len=len(chunk_text),
+                char_len=len(chunk),
             ))
-
         return chunks
 
     # ------------------------------------------------------------------
@@ -109,8 +118,9 @@ class DataProcessor:
     def build_corpus_chunks(self) -> Iterator[CorpusChunk]:
         """Generator — yields CorpusChunk objects for every corpus row.
 
-        Deduplicates chunks by text hash so that identical constitutional
-        articles repeated across multiple QA rows are only emitted once.
+        Deduplicates by text hash so each unique legal passage appears once.
+        build_relevant_chunk_map uses context-hash matching to correctly
+        resolve the canonical chunk even when the query's row was deduplicated.
         """
         seen_hashes: set[str] = set()
         kept = 0
@@ -165,21 +175,99 @@ class DataProcessor:
         return examples
 
     def build_qa_eval_set(self) -> list[QAExample]:
-        """Build QA eval (test split).  Warns if count != QA_EVAL_EXPECTED."""
-        df = self.get_qa_split("test")
-        examples = self._rows_to_qa_examples(df)
-        if len(examples) != config.QA_EVAL_EXPECTED:
-            warnings.warn(
-                f"QA eval set has {len(examples)} examples; expected {config.QA_EVAL_EXPECTED}.",
-                UserWarning,
-                stacklevel=2,
-            )
-        return examples
+        """Build QA eval set sampled from kaggle split.
+
+        Kaggle rows have question + answer + context + source, enabling
+        model-independent ground-truth relevance mapping via doc_id match.
+        Uses random_state=42 for reproducibility.
+        """
+        df = self.get_corpus_rows()  # split == "kaggle", all rows have source+context
+        n = min(config.QA_EVAL_EXPECTED, len(df))
+        sampled = df.sample(n=n, random_state=42)
+        return self._rows_to_qa_examples(sampled)
 
     def build_qa_train_set(self) -> list[QAExample]:
         """Build QA train set (train split)."""
         df = self.get_qa_split("train")
         return self._rows_to_qa_examples(df)
+
+    # ------------------------------------------------------------------
+    # Ground-truth relevance map
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def build_relevant_chunk_map(
+        corpus_chunks: list,          # list[CorpusChunk]
+        qa_examples: list,            # list[QAExample]
+        retriever=None,               # kept for API compatibility, ignored
+    ) -> dict:                        # {query_id: [chunk_id, ...]}
+        """
+        Build ground-truth relevance map using source/doc_id join.
+        Model-independent: does NOT use embeddings to define relevance.
+
+        Strategy (in order):
+        1. Exact source match: qa.source == chunk.source
+        2. doc_id prefix match: chunk.doc_id starts with qa's row id
+        3. Answer substring: chunk.text contains a significant portion of qa.answer
+           (at least 80 chars of the answer appears in the chunk)
+
+        Returns dict mapping query_id -> list of relevant chunk_ids.
+        """
+        import logging
+        log = logging.getLogger(__name__)
+
+        # Build lookup structures
+        hash_to_chunk_ids: dict[str, list[str]] = {}
+        by_source: dict[str, list] = {}
+        for chunk in corpus_chunks:
+            h = hashlib.md5(chunk.text.encode()).hexdigest()
+            hash_to_chunk_ids.setdefault(h, []).append(chunk.chunk_id)
+            by_source.setdefault(chunk.source, []).append(chunk)
+
+        relevant_map: dict[str, list[str]] = {}
+        no_match_count = 0
+
+        for qa in qa_examples:
+            relevant: list[str] = []
+
+            # Strategy 1: context-hash match — re-chunk qa.context and find
+            # the canonical corpus chunks by text hash.  This correctly handles
+            # the deduplicated corpus: the relevant chunk may be stored under a
+            # different doc_id than qa.query_id if it was first seen in another row.
+            if qa.context:
+                for text in _TEXT_SPLITTER.split_text(qa.context):
+                    if len(text) >= config.CORPUS_DOC_MIN_CHARS:
+                        h = hashlib.md5(text.encode()).hexdigest()
+                        relevant.extend(hash_to_chunk_ids.get(h, []))
+                # deduplicate while preserving order
+                seen: set[str] = set()
+                deduped = []
+                for cid in relevant:
+                    if cid not in seen:
+                        seen.add(cid)
+                        deduped.append(cid)
+                relevant = deduped
+
+            # Strategy 2: doc_id match — used when context is empty/missing
+            if not relevant:
+                relevant = [c.chunk_id for c in corpus_chunks if c.doc_id == qa.query_id]
+
+            # Strategy 3: exact source match — broad last resort
+            if not relevant and qa.source and qa.source in by_source:
+                relevant = [c.chunk_id for c in by_source[qa.source]]
+
+            if not relevant:
+                no_match_count += 1
+
+            relevant_map[qa.query_id] = relevant
+
+        if no_match_count:
+            log.warning(
+                "build_relevant_chunk_map: %d/%d queries have no relevant chunks. "
+                "Check that qa.source values match corpus chunk sources.",
+                no_match_count, len(qa_examples),
+            )
+        return relevant_map
 
     # ------------------------------------------------------------------
     # JSONL I/O

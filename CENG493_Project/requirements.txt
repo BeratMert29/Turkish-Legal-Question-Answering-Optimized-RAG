@@ -9,3 +9,8 @@ numpy==1.26.4
 pandas==2.2.3
 httpx
 rank_bm25>=0.2.2
+ranx>=0.3.5
+langchain-text-splitters>=0.3.0
+scipy>=1.12.0
+evaluate>=0.4.0
+tqdm>=4.66.0

@@ -41,12 +41,8 @@ class Embedder:
             batch_size=self.batch_size,
             show_progress_bar=show_progress,
             convert_to_numpy=True,
-            normalize_embeddings=False,  # we normalize explicitly below
-        )
-        embeddings = embeddings.astype(np.float32)
-        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-        norms = np.where(norms == 0, 1.0, norms)  # avoid div by zero
-        embeddings = embeddings / norms
+            normalize_embeddings=True,
+        ).astype(np.float32)
         assert embeddings.shape[1] == config.EMBEDDING_DIM, (
             f"Embedding dim mismatch: model produced {embeddings.shape[1]}, "
             f"expected config.EMBEDDING_DIM={config.EMBEDDING_DIM}"

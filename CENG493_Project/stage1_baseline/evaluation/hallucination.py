@@ -1,5 +1,6 @@
 import random
 import config
+from scipy.special import softmax as scipy_softmax
 
 
 def _classify_result(result: dict) -> str:
@@ -11,9 +12,9 @@ def _classify_result(result: dict) -> str:
     if not chunks:
         return "miss"
     top_score = chunks[0]["score"]  # dict access, not attribute
-    if top_score > 0.7:
+    if top_score > config.HALLUCINATION_HIT_THRESHOLD:
         return "hit"
-    elif top_score >= 0.4:
+    elif top_score >= config.HALLUCINATION_PARTIAL_THRESHOLD:
         return "partial"
     else:
         return "miss"
@@ -62,15 +63,18 @@ def evaluate_faithfulness(answer: str, context: str, nli_model) -> dict:
     """
     Evaluate faithfulness using NLI CrossEncoder.
     cross-encoder/nli-deberta-v3-small returns logits shape (n_pairs, 3)
-    Label order: [contradiction, neutral, entailment] — index 2 is entailment.
+    Label order: [contradiction, entailment, neutral] — index 1 is entailment.
     """
-    import numpy as np
     logits = nli_model.predict([(context, answer)])  # shape (1, 3)
     logit_vec = logits[0]  # shape (3,)
-    # Softmax to get probabilities
-    exp_logits = np.exp(logit_vec - np.max(logit_vec))  # numerically stable
-    probs = exp_logits / exp_logits.sum()
-    entailment_prob = float(probs[2])  # index 2 = entailment
+    probs = scipy_softmax(logit_vec)
+    # Determine entailment index dynamically if model config is available
+    entailment_idx = 1  # default for cross-encoder/nli-deberta-v3-small: [contradiction, entailment, neutral]
+    if hasattr(nli_model, 'config') and hasattr(nli_model.config, 'id2label'):
+        id2label = nli_model.config.id2label
+        label2id = {v.lower(): k for k, v in id2label.items()}
+        entailment_idx = label2id.get('entailment', 1)
+    entailment_prob = float(probs[entailment_idx])
     return {"faithful": entailment_prob >= 0.5, "score": entailment_prob}
 
 
@@ -80,7 +84,7 @@ def run_hallucination_analysis(
     nli_model,
 ) -> dict:
     """
-    Run faithfulness analysis on stratified sample.
+    Run faithfulness analysis on stratified sample using batched NLI inference.
 
     Args:
         sample_dict: {"hits": [...], "partial": [...], "misses": [...]} from stratified_sample()
@@ -89,31 +93,57 @@ def run_hallucination_analysis(
 
     Returns: {"summary": {...}, "per_sample": [...]}
     """
+    import numpy as np
+
+    # Determine entailment index from model config
+    entailment_idx = 1  # default: [contradiction, entailment, neutral]
+    if hasattr(nli_model, 'config') and hasattr(nli_model.config, 'id2label'):
+        id2label = nli_model.config.id2label
+        label2id = {v.lower(): k for k, v in id2label.items()}
+        entailment_idx = int(label2id.get('entailment', 1))
+
+    # Collect all samples with their metadata
+    ordered_items = []  # (query_id, answer, context, category)
+    for category, items in sample_dict.items():
+        for item in items:
+            query_id = item.get("query_id", "")
+            answer = item.get("predicted", "")
+            chunks = retrieved_results.get(query_id, [])
+            context = "\n\n".join(c["text"] for c in chunks[:5]) if chunks else ""
+            ordered_items.append((query_id, answer, context, category))
+
+    # Batch NLI inference
+    pairs = [(ctx, ans) for _, ans, ctx, _ in ordered_items]
+    if pairs:
+        all_logits = nli_model.predict(pairs, batch_size=32)  # shape (N, 3)
+        if all_logits.ndim == 1:
+            all_logits = all_logits.reshape(1, -1)
+    else:
+        all_logits = np.zeros((0, 3), dtype=np.float32)
+
+    softmax = scipy_softmax
+
     per_sample = []
     faithful_count = 0
     by_category = {"hits": {"total": 0, "faithful": 0},
                    "partial": {"total": 0, "faithful": 0},
                    "misses": {"total": 0, "faithful": 0}}
 
-    for category, items in sample_dict.items():
-        for item in items:
-            query_id = item.get("query_id", "")
-            answer = item.get("predicted", "")
-            # Build context from full retrieved chunks
-            chunks = retrieved_results.get(query_id, [])
-            context = "\n\n".join(c["text"] for c in chunks[:5]) if chunks else ""
-            result = evaluate_faithfulness(answer, context, nli_model)
-            if result["faithful"]:
-                faithful_count += 1
-                by_category[category]["faithful"] += 1
-            by_category[category]["total"] += 1
-            per_sample.append({
-                "query_id": query_id,
-                "category": category,
-                "answer": answer,
-                "faithful": result["faithful"],
-                "score": result["score"],
-            })
+    for i, (query_id, answer, context, category) in enumerate(ordered_items):
+        probs = softmax(all_logits[i])
+        entailment_prob = float(probs[entailment_idx])
+        is_faithful = entailment_prob >= 0.5
+        if is_faithful:
+            faithful_count += 1
+            by_category[category]["faithful"] += 1
+        by_category[category]["total"] += 1
+        per_sample.append({
+            "query_id": query_id,
+            "category": category,
+            "answer": answer,
+            "faithful": is_faithful,
+            "score": entailment_prob,
+        })
 
     total = sum(c["total"] for c in by_category.values())
     return {

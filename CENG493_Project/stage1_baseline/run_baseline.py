@@ -8,11 +8,8 @@ Usage:
 import argparse
 import json
 import logging
-import random
 import sys
 from pathlib import Path
-
-import numpy as np
 
 # Ensure parent dir (where config.py lives) and this dir are on the path
 _HERE = Path(__file__).resolve().parent
@@ -29,30 +26,16 @@ from generation.rag_pipeline import RAGPipeline
 from evaluation.retrieval_metrics import compute_all_metrics
 from evaluation.qa_metrics import compute_all_qa_metrics_with_citation
 from evaluation.hallucination import run_hallucination_analysis, stratified_sample
+from utils import set_seeds, check_ollama
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 
-def _check_ollama(base_url: str) -> bool:
-    import httpx
-    try:
-        # Strip /v1 suffix to get root health endpoint
-        root = base_url.rstrip("/").removesuffix("/v1")
-        httpx.get(root, timeout=3.0)
-        return True
-    except Exception:
-        return False
-
-
-def set_seeds(seed: int = 42) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-
-
-def build_index(processor: DataProcessor, embedder: Embedder) -> Retriever:
-    log.info("Building corpus chunks …")
-    chunks: list[CorpusChunk] = list(processor.build_corpus_chunks())
+def build_index(processor: DataProcessor, embedder: Embedder, chunks: list[CorpusChunk] = None) -> Retriever:
+    if chunks is None:
+        log.info("Building corpus chunks …")
+        chunks = list(processor.build_corpus_chunks())
     log.info("  %d chunks total", len(chunks))
 
     texts = [c.text for c in chunks]
@@ -65,16 +48,16 @@ def build_index(processor: DataProcessor, embedder: Embedder) -> Retriever:
     log.info("Encoding corpus (this may take a while) …")
     retriever.build_index(texts, metadata)
 
-    index_path = config.INDEX_DIR / "faiss.index"
-    meta_path = config.INDEX_DIR / "metadata.jsonl"
+    index_path = config.INDEX_DIR / config.INDEX_FILE
+    meta_path = config.INDEX_DIR / config.METADATA_FILE
     retriever.save_index(index_path, meta_path)
     log.info("Index saved → %s", index_path)
     return retriever
 
 
 def load_index(embedder: Embedder) -> Retriever:
-    index_path = config.INDEX_DIR / "faiss.index"
-    meta_path = config.INDEX_DIR / "metadata.jsonl"
+    index_path = config.INDEX_DIR / config.INDEX_FILE
+    meta_path = config.INDEX_DIR / config.METADATA_FILE
     log.info("Loading index from %s …", index_path)
     retriever = Retriever(embedder, index_path=index_path, metadata_path=meta_path)
     log.info("  %d vectors loaded", retriever.index.ntotal)
@@ -113,19 +96,25 @@ def run_generation_eval(
     pipeline: RAGPipeline,
     qa_examples: list[QAExample],
 ) -> tuple[dict, list[dict]]:
+    log.info("Batch-retrieving %d queries …", len(qa_examples))
+    questions = [qa.question for qa in qa_examples]
+    all_retrieved = pipeline.retriever.batch_retrieve(questions, top_k=config.TOP_K_RETRIEVAL)
+
     log.info("Running generation on %d examples …", len(qa_examples))
     predictions = []
-    for i, qa in enumerate(qa_examples):
+    from tqdm import tqdm
+    for i, (qa, retrieved_chunks) in enumerate(tqdm(zip(qa_examples, all_retrieved), total=len(qa_examples), desc="Generating")):
         try:
-            result = pipeline.run(qa.question)
-            retrieved_sources = [c["source"] for c in result["retrieved_chunks"]]
+            context_used, context_chunks = pipeline.assemble_context(retrieved_chunks)
+            answer = pipeline.generate(qa.question, context_used)
+            retrieved_sources = [c["source"] for c in context_chunks]
             predictions.append({
                 "query_id": qa.query_id,
-                "predicted": result["answer"],
+                "predicted": answer,
                 "expected": qa.answer,
                 "retrieved_sources": retrieved_sources,
                 "expected_source": qa.source,
-                "retrieved_chunks": [dict(c) for c in result["retrieved_chunks"]],
+                "retrieved_chunks": [dict(c) for c in context_chunks],
             })
         except Exception as exc:
             log.warning("Generation failed for query %s: %s", qa.query_id, exc)
@@ -137,9 +126,6 @@ def run_generation_eval(
                 "expected_source": qa.source,
                 "retrieved_chunks": [],
             })
-        if (i + 1) % 50 == 0:
-            log.info("  %d/%d done", i + 1, len(qa_examples))
-
     metrics = compute_all_qa_metrics_with_citation(predictions)
     log.info("QA metrics: %s", metrics)
     return metrics, predictions
@@ -203,8 +189,11 @@ def main() -> None:
     embedder = Embedder()
     embedder.load_model()
 
+    log.info("Building corpus chunks for reuse …")
+    corpus_chunks: list[CorpusChunk] = list(processor.build_corpus_chunks())
+
     if args.build_index:
-        retriever = build_index(processor, embedder)
+        retriever = build_index(processor, embedder, chunks=corpus_chunks)
     else:
         retriever = load_index(embedder)
 
@@ -213,7 +202,7 @@ def main() -> None:
         return
 
     qa_examples: list[QAExample] = processor.build_qa_eval_set()
-    corpus_chunks: list[CorpusChunk] = list(processor.build_corpus_chunks())
+    # corpus_chunks already built above — no second call needed
 
     # --- Retrieval metrics ---
     retrieval_metrics, retrieval_results = run_retrieval_eval(retriever, qa_examples, corpus_chunks)
@@ -223,7 +212,7 @@ def main() -> None:
 
     if args.eval:
         # --- Ollama connectivity check ---
-        if not _check_ollama(config.LLM_BASE_URL):
+        if not check_ollama(config.LLM_BASE_URL, config.LLM_MODEL):
             log.warning(
                 "Ollama not reachable at %s — skipping generation eval",
                 config.LLM_BASE_URL,

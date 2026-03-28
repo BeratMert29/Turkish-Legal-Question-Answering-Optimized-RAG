@@ -1,9 +1,11 @@
 import openai
 import config
 
-TURKISH_PROMPT = """Sen bir Türk hukuk uzmanısın. Sana verilen bağlam bilgilerini kullanarak
-soruyu doğru, eksiksiz ve kaynaklara dayalı olarak yanıtla.
-Eğer bağlam bilgisi yetersizse, bunu açıkça belirt.
+TURKISH_PROMPT = """Sen bir Türk hukuku konusunda uzman hukuki asistansın.
+Soruyu YALNIZCA aşağıda verilen [Kaynak N] bağlam bilgilerini kullanarak yanıtla.
+Kendi bilginden veya bağlamda bulunmayan bilgilerden kesinlikle yararlanma.
+Yanıtında hangi kaynağı ([Kaynak N]) kullandığını belirt.
+Eğer bağlam bilgisi soruyu yanıtlamak için yetersizse, bunu açıkça belirt ve tahmin yürütme.
 Yanıtını Türkçe ver."""
 
 class RAGPipeline:
@@ -28,25 +30,25 @@ class RAGPipeline:
         """Return the shared OpenAI client pointing at Ollama endpoint."""
         return self._client
 
-    def assemble_context(self, chunks: list) -> str:
+    def assemble_context(self, chunks: list) -> tuple[str, list]:
         """
         Format top_k_for_generation chunks as numbered sources.
-        Each chunk: "[Kaynak {i+1}] ({source})\n{text}\n\n"
-        Concatenate then truncate to context_window_chars.
-        chunks is list of RetrievedChunk TypedDicts — use dict access: chunk["source"], chunk["text"]
+        Returns (context_str, included_chunks) where included_chunks contains
+        only the chunks whose text was not truncated out.
         """
         selected = chunks[:self.top_k_for_generation]
-        parts = [
-            f"[Kaynak {i+1}] ({chunk['source']})\n{chunk['text']}\n\n"
-            for i, chunk in enumerate(selected)
-        ]
+        parts = []
+        included = []
+        running_len = 0
+        for i, chunk in enumerate(selected):
+            part = f"[Kaynak {i+1}] ({chunk['source']})\n{chunk['text']}\n\n"
+            if running_len + len(part) > self.context_window_chars:
+                break
+            parts.append(part)
+            included.append(chunk)
+            running_len += len(part)
         context = "".join(parts)
-        truncated = context[:self.context_window_chars]
-        # Snap back to last chunk boundary to avoid mid-sentence truncation
-        last_boundary = truncated.rfind('\n\n')
-        if last_boundary > 0:
-            truncated = truncated[:last_boundary]
-        return truncated
+        return context, included
 
     def generate(self, question: str, context: str) -> str:
         """Generate answer via Ollama LLM."""
@@ -79,11 +81,11 @@ class RAGPipeline:
             }
         """
         retrieved_chunks = self.retriever.retrieve(question, top_k=top_k_retrieval)
-        context_used = self.assemble_context(retrieved_chunks)
+        context_used, context_chunks = self.assemble_context(retrieved_chunks)
         answer = self.generate(question, context_used)
         return {
             "question": question,
             "answer": answer,
-            "retrieved_chunks": retrieved_chunks,
+            "retrieved_chunks": context_chunks,   # only chunks that were in context
             "context_used": context_used,
         }

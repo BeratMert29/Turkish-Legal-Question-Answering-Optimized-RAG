@@ -22,15 +22,13 @@ ORACLE_NOTE = (
     "domain clustering (all Turkish legal text has cosine sim > 0.80)."
 )
 
-TOP_K_ORACLE = 5   # number of oracle-relevant chunks per query
-
 
 def main():
     config.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     # ── Load index ──────────────────────────────────────────────────────────
-    index_path    = config.INDEX_DIR / "faiss_index.bin"
-    metadata_path = config.INDEX_DIR / "chunk_metadata.jsonl"
+    index_path    = config.INDEX_DIR / config.INDEX_FILE
+    metadata_path = config.INDEX_DIR / config.METADATA_FILE
     print(f"Loading index from {index_path}")
     embedder = Embedder()
     embedder.load_model()
@@ -92,7 +90,7 @@ def main():
         for i, (example, chunks) in enumerate(zip(eval_set, all_retrieved)):
             qid  = example['query_id']
             sims = sim_matrix[i]
-            top_idx = np.argsort(sims)[::-1][:TOP_K_ORACLE]
+            top_idx = np.argsort(sims)[::-1][:config.TOP_K_ORACLE]
             relevant = [doc_ids_list[j] for j in top_idx]
             seen, retrieved_doc_ids = set(), []
             for c in chunks:
