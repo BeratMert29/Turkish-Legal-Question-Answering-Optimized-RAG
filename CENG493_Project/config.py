@@ -9,7 +9,8 @@ CORPUS_DOC_MIN_CHARS = 180
 
 # Data
 QA_EVAL_EXPECTED = 300
-RAW_DATA_PATH = BASE_DIR.parent / "combined_dataset.csv"
+QA_GOLD_FILE = "qa_gold.jsonl"
+RAW_DATA_PATH = BASE_DIR / "data/raw/combined_dataset.csv"
 PROCESSED_DIR = BASE_DIR / "data/processed"
 INDEX_DIR = BASE_DIR / "index"
 RESULTS_DIR = BASE_DIR / "results/stage1"
@@ -22,7 +23,12 @@ EMBEDDING_BATCH_SIZE = 32
 # Retrieval
 TOP_K_RETRIEVAL = 10
 TOP_K_FOR_GENERATION = 5
-CONTEXT_WINDOW_CHARS = 3000
+CONTEXT_WINDOW_CHARS = 5000
+
+# Re-ranker (Stage 2 retrieval)
+RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
+RERANKER_CANDIDATES = 50   # initial dense/RRF pool before cross-encoder re-ranking
+RRF_K = 60                 # RRF smoothing constant
 
 # LLM (Ollama — free, no API key)
 LLM_MODEL = "qwen2.5:7b"

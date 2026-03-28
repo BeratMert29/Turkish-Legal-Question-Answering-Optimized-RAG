@@ -1,5 +1,6 @@
 from dataclasses import dataclass, asdict
 from typing import Iterator
+import hashlib
 import json
 import warnings
 import pathlib
@@ -38,7 +39,7 @@ class DataProcessor:
 
     def load_and_validate(self) -> dict:
         """Load CSV, check required columns, return summary dict."""
-        self._df = pd.read_csv(self.csv_path, encoding="utf-8")
+        self._df = pd.read_csv(self.csv_path)
 
         if self._df.empty:
             raise ValueError(f"CSV is empty: {self.csv_path}")
@@ -91,8 +92,6 @@ class DataProcessor:
 
         for i, start in enumerate(range(0, len(text), step)):
             chunk_text = text[start: start + config.CHUNK_SIZE]
-            if len(chunk_text) < config.CORPUS_DOC_MIN_CHARS:
-                continue
             chunks.append(CorpusChunk(
                 chunk_id=f"{source}_{doc_id}_{i}",
                 doc_id=doc_id,
@@ -108,13 +107,29 @@ class DataProcessor:
     # ------------------------------------------------------------------
 
     def build_corpus_chunks(self) -> Iterator[CorpusChunk]:
-        """Generator — yields CorpusChunk objects for every corpus row."""
+        """Generator — yields CorpusChunk objects for every corpus row.
+
+        Deduplicates chunks by text hash so that identical constitutional
+        articles repeated across multiple QA rows are only emitted once.
+        """
+        seen_hashes: set[str] = set()
+        kept = 0
+        skipped = 0
+
         for row in self.get_corpus_rows().itertuples(index=False):
             context = row.context if pd.notna(row.context) else ""
             if not context:
                 continue
             for chunk in self.chunk_text(str(context), str(row.id), str(row.source)):
+                text_hash = hashlib.md5(chunk.text.encode()).hexdigest()
+                if text_hash in seen_hashes:
+                    skipped += 1
+                    continue
+                seen_hashes.add(text_hash)
+                kept += 1
                 yield chunk
+
+        print(f"[build_corpus_chunks] kept={kept}, skipped={skipped} duplicate chunks")
 
     # ------------------------------------------------------------------
     # QA set builders
@@ -150,136 +165,21 @@ class DataProcessor:
         return examples
 
     def build_qa_eval_set(self) -> list[QAExample]:
-        """Build QA eval (test split), capped at QA_EVAL_EXPECTED examples."""
+        """Build QA eval (test split).  Warns if count != QA_EVAL_EXPECTED."""
         df = self.get_qa_split("test")
-        if len(df) > config.QA_EVAL_EXPECTED:
-            df = df.iloc[: config.QA_EVAL_EXPECTED]
         examples = self._rows_to_qa_examples(df)
+        if len(examples) != config.QA_EVAL_EXPECTED:
+            warnings.warn(
+                f"QA eval set has {len(examples)} examples; expected {config.QA_EVAL_EXPECTED}.",
+                UserWarning,
+                stacklevel=2,
+            )
         return examples
 
     def build_qa_train_set(self) -> list[QAExample]:
         """Build QA train set (train split)."""
         df = self.get_qa_split("train")
         return self._rows_to_qa_examples(df)
-
-    # ------------------------------------------------------------------
-    # Ground-truth relevance linker
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def build_relevant_chunk_map(
-        corpus_chunks: list["CorpusChunk"],
-        qa_examples: list["QAExample"],
-        retriever=None,
-        top_k_relevant: int = 20,
-        score_threshold: float = 0.5,
-    ) -> dict[str, list[str]]:
-        """
-        Returns {query_id: [chunk_id, ...]} for chunks relevant to each QA example.
-
-        When *retriever* is provided, uses semantic similarity: encodes each
-        answer/context and retrieves the most similar corpus chunks via the
-        same FAISS index.  This is far more reliable than token overlap when
-        gold context labels are unavailable (e.g. test split has no source).
-
-        Falls back to an improved token-overlap heuristic (Turkish-aware
-        normalisation, stopword removal, 50 % threshold) when no retriever
-        is supplied.
-        """
-        if retriever is not None:
-            return DataProcessor._build_semantic_relevant_map(
-                qa_examples, retriever, top_k_relevant, score_threshold,
-            )
-        return DataProcessor._build_token_relevant_map(corpus_chunks, qa_examples)
-
-    @staticmethod
-    def _build_semantic_relevant_map(
-        qa_examples: list["QAExample"],
-        retriever,
-        top_k: int,
-        score_threshold: float,
-    ) -> dict[str, list[str]]:
-        """Find relevant chunks by embedding the answer and searching the index."""
-        ref_texts: list[str] = []
-        valid_indices: list[int] = []
-        for i, qa in enumerate(qa_examples):
-            ref_text = qa.context if qa.context else qa.answer
-            if ref_text:
-                ref_texts.append(ref_text)
-                valid_indices.append(i)
-
-        all_results = retriever.batch_retrieve(ref_texts, top_k=top_k)
-
-        result: dict[str, list[str]] = {qa.query_id: [] for qa in qa_examples}
-        for idx, retrieved in zip(valid_indices, all_results):
-            qa = qa_examples[idx]
-            result[qa.query_id] = [
-                c["chunk_id"] for c in retrieved
-                if c["score"] >= score_threshold
-            ]
-        return result
-
-    @staticmethod
-    def _build_token_relevant_map(
-        corpus_chunks: list["CorpusChunk"],
-        qa_examples: list["QAExample"],
-    ) -> dict[str, list[str]]:
-        """
-        Improved token-overlap fallback with Turkish-aware normalisation,
-        stopword removal, and a 50 % threshold.
-        """
-        from collections import defaultdict
-        import unicodedata
-
-        _STOPWORDS = frozenset({
-            'bir', 've', 'bu', 'de', 'da', 'ile', 'için', 'olan', 'olarak',
-            'veya', 'ise', 'gibi', 'her', 'daha', 'en', 'o', 'ne', 'ya',
-            'ki', 'mi', 'mu', 'dir', 'den', 'dan', 'ler', 'lar',
-            'nin', 'nun', 'in', 'un', 'ın', 'ya', 'ye', 'ta', 'te',
-            'kadar', 'sonra', 'dair', 'göre', 'başka', 'ancak', 'ayrıca',
-        })
-
-        def _normalize(text: str) -> set[str]:
-            text = text.replace('\u0130', 'i').replace('I', '\u0131')
-            text = text.lower()
-            text = unicodedata.normalize('NFC', text)
-            return set(text.split()) - _STOPWORDS
-
-        token_index: dict[str, list[int]] = defaultdict(list)
-        chunk_token_sets: list[set] = []
-        chunk_ids: list[str] = []
-
-        for i, chunk in enumerate(corpus_chunks):
-            tokens = _normalize(chunk.text)
-            chunk_token_sets.append(tokens)
-            chunk_ids.append(chunk.chunk_id)
-            for tok in tokens:
-                token_index[tok].append(i)
-
-        result: dict[str, list[str]] = {}
-        for qa in qa_examples:
-            ref_text = qa.context if qa.context else qa.answer
-            if not ref_text:
-                result[qa.query_id] = []
-                continue
-            ref_tokens = _normalize(ref_text)
-            if len(ref_tokens) < 3:
-                result[qa.query_id] = []
-                continue
-
-            candidate_hits: dict[int, int] = defaultdict(int)
-            for tok in ref_tokens:
-                for cidx in token_index.get(tok, []):
-                    candidate_hits[cidx] += 1
-
-            threshold = max(0.5 * len(ref_tokens), 5)
-            relevant = [
-                chunk_ids[cidx]
-                for cidx, hit_count in candidate_hits.items()
-                if hit_count >= threshold
-            ]
-            result[qa.query_id] = relevant
-        return result
 
     # ------------------------------------------------------------------
     # JSONL I/O

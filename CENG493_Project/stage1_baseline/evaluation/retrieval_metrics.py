@@ -7,7 +7,7 @@ def recall_at_k(retrieved_ids: list[str], relevant_ids: list[str], k: int) -> fl
         return 0.0
     relevant_set = set(relevant_ids)
     hits = sum(1 for r in retrieved_ids[:k] if r in relevant_set)
-    return hits / len(relevant_ids)
+    return hits / len(relevant_set)
 
 
 def mrr(retrieved_ids: list[str], relevant_ids: list[str]) -> float:
@@ -29,7 +29,7 @@ def ndcg_at_k(retrieved_ids: list[str], relevant_ids: list[str], k: int) -> floa
         for i, doc_id in enumerate(retrieved_ids[:k])
         if doc_id in relevant_set
     )
-    ideal_k = min(k, len(relevant_ids))
+    ideal_k = min(k, len(relevant_set))
     idcg = sum(1.0 / math.log2(i + 2) for i in range(ideal_k))
     return dcg / idcg if idcg > 0 else 0.0
 
@@ -47,12 +47,15 @@ def compute_query_metrics(result: dict) -> dict:
 
 def compute_all_metrics(results: list[dict]) -> dict:
     if not results:
-        return {"recall@5": 0.0, "recall@10": 0.0, "mrr": 0.0, "ndcg@10": 0.0, "num_queries": 0, "num_unjudged": 0}
-    total = len(results)
-    judged = [r for r in results if len(r["relevant"]) > 0]
-    num_unjudged = total - len(judged)
+        return {"recall@5": 0.0, "recall@10": 0.0, "mrr": 0.0, "ndcg@10": 0.0, "num_queries": 0}
+    valid_results = []
+    for i, r in enumerate(results):
+        if "retrieved" not in r or "relevant" not in r:
+            print(f"[WARNING] Skipping result at index {i}: missing 'retrieved' or 'relevant' key.")
+            continue
+        valid_results.append(r)
+    if not valid_results:
+        return {"recall@5": 0.0, "recall@10": 0.0, "mrr": 0.0, "ndcg@10": 0.0, "num_queries": 0}
+    per_query = [compute_query_metrics(r) for r in valid_results]
     keys = ["recall@5", "recall@10", "mrr", "ndcg@10"]
-    if not judged:
-        return {"recall@5": 0.0, "recall@10": 0.0, "mrr": 0.0, "ndcg@10": 0.0, "num_queries": 0, "num_unjudged": total}
-    per_query = [compute_query_metrics(r) for r in judged]
-    return {k: sum(q[k] for q in per_query) / len(per_query) for k in keys} | {"num_queries": len(judged), "num_unjudged": num_unjudged}
+    return {k: sum(q[k] for q in per_query) / len(per_query) for k in keys} | {"num_queries": len(valid_results)}

@@ -93,3 +93,117 @@ class Retriever:
                 ))
             results.append(chunks)
         return results
+
+    def hybrid_retrieve(self, query: str, bm25_index, alpha: float = 0.7,
+                        top_k: int = None) -> list[RetrievedChunk]:
+        """Hybrid dense+sparse retrieval for a single query.
+        final_score = alpha * dense_score + (1 - alpha) * bm25_score
+        """
+        if self.index is None:
+            raise RuntimeError("Call build_index() or load_index() before using the retriever")
+        if top_k is None:
+            top_k = config.TOP_K_RETRIEVAL
+        n = self.index.ntotal
+        q_emb = self.embedder.encode([query], is_query=True, show_progress=False)
+        dense_scores_all, dense_indices_all = self.index.search(q_emb.astype(np.float32), n)
+        dense_scores_full = np.zeros(n, dtype=np.float32)
+        for score, idx in zip(dense_scores_all[0], dense_indices_all[0]):
+            if idx != -1:
+                dense_scores_full[idx] = score
+        bm25_scores = bm25_index.get_scores(query)
+        final_scores = alpha * dense_scores_full + (1.0 - alpha) * bm25_scores
+        top_indices = np.argsort(final_scores)[::-1][:top_k]
+        return [RetrievedChunk(
+            text=self.metadata[i].get("text", ""),
+            doc_id=self.metadata[i].get("doc_id", ""),
+            source=self.metadata[i].get("source", ""),
+            score=float(final_scores[i]),
+            chunk_id=self.metadata[i].get("chunk_id", ""),
+        ) for i in top_indices]
+
+    def batch_hybrid_retrieve(self, queries: list[str], bm25_index,
+                              alpha: float = 0.7,
+                              top_k: int = None) -> list[list[RetrievedChunk]]:
+        """Hybrid dense+sparse retrieval for a batch of queries.
+        final_score = alpha * dense_score + (1 - alpha) * bm25_score
+        """
+        if self.index is None:
+            raise RuntimeError("Call build_index() or load_index() before using the retriever")
+        if top_k is None:
+            top_k = config.TOP_K_RETRIEVAL
+        n = self.index.ntotal
+        q_embs = self.embedder.encode(queries, is_query=True)
+        dense_scores_all, dense_indices_all = self.index.search(q_embs.astype(np.float32), n)
+        results = []
+        for q_idx, query in enumerate(queries):
+            dense_scores_full = np.zeros(n, dtype=np.float32)
+            for score, idx in zip(dense_scores_all[q_idx], dense_indices_all[q_idx]):
+                if idx != -1:
+                    dense_scores_full[idx] = score
+            bm25_scores = bm25_index.get_scores(query)
+            final_scores = alpha * dense_scores_full + (1.0 - alpha) * bm25_scores
+            top_indices = np.argsort(final_scores)[::-1][:top_k]
+            results.append([RetrievedChunk(
+                text=self.metadata[i].get("text", ""),
+                doc_id=self.metadata[i].get("doc_id", ""),
+                source=self.metadata[i].get("source", ""),
+                score=float(final_scores[i]),
+                chunk_id=self.metadata[i].get("chunk_id", ""),
+            ) for i in top_indices])
+        return results
+
+    # ── Reciprocal Rank Fusion ────────────────────────────────────────────
+
+    def batch_rrf_retrieve(self, queries: list[str], bm25_index,
+                           top_k: int = None,
+                           rrf_k: int = None,
+                           candidate_pool: int = None) -> list[list[RetrievedChunk]]:
+        """Reciprocal Rank Fusion of dense + BM25 rankings.
+
+        RRF is rank-based so it avoids the score-calibration issues of
+        linear blending. Each document's fused score is:
+            sum_over_lists( 1 / (rrf_k + rank) )
+        """
+        if self.index is None:
+            raise RuntimeError("Call build_index() or load_index() before using the retriever")
+        if top_k is None:
+            top_k = config.TOP_K_RETRIEVAL
+        if rrf_k is None:
+            rrf_k = config.RRF_K
+        if candidate_pool is None:
+            candidate_pool = config.RERANKER_CANDIDATES
+
+        q_embs = self.embedder.encode(queries, is_query=True)
+        dense_scores_all, dense_indices_all = self.index.search(
+            q_embs.astype(np.float32), candidate_pool,
+        )
+
+        results: list[list[RetrievedChunk]] = []
+        for q_idx, query in enumerate(queries):
+            dense_ranking: dict[int, int] = {}
+            for rank, idx in enumerate(dense_indices_all[q_idx]):
+                if idx != -1:
+                    dense_ranking[int(idx)] = rank
+
+            bm25_top = bm25_index.get_top_k(query, k=candidate_pool)
+            bm25_ranking = {idx: rank for rank, (idx, _score) in enumerate(bm25_top)}
+
+            candidates = set(dense_ranking) | set(bm25_ranking)
+            rrf_scores: dict[int, float] = {}
+            for idx in candidates:
+                score = 0.0
+                if idx in dense_ranking:
+                    score += 1.0 / (rrf_k + dense_ranking[idx])
+                if idx in bm25_ranking:
+                    score += 1.0 / (rrf_k + bm25_ranking[idx])
+                rrf_scores[idx] = score
+
+            top_indices = sorted(rrf_scores, key=rrf_scores.get, reverse=True)[:top_k]
+            results.append([RetrievedChunk(
+                text=self.metadata[i].get("text", ""),
+                doc_id=self.metadata[i].get("doc_id", ""),
+                source=self.metadata[i].get("source", ""),
+                score=float(rrf_scores[i]),
+                chunk_id=self.metadata[i].get("chunk_id", ""),
+            ) for i in top_indices])
+        return results
