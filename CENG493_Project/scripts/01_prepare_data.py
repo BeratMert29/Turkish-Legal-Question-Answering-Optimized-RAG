@@ -6,7 +6,7 @@ _project_root = str(Path(__file__).parent.parent)
 if _project_root not in sys.path:
     sys.path.append(_project_root)
 import config
-from stage1_baseline.data.data_processor import DataProcessor
+from data.data_processor import DataProcessor
 
 def main():
     config.PROCESSED_DIR.mkdir(parents=True, exist_ok=True)

@@ -6,9 +6,9 @@ _project_root = str(Path(__file__).parent.parent)
 if _project_root not in sys.path:
     sys.path.append(_project_root)
 import config
-from stage1_baseline.data.data_processor import DataProcessor
-from stage1_baseline.evaluation.qa_metrics import compute_all_qa_metrics
-from stage1_baseline.evaluation.hallucination import stratified_sample, run_hallucination_analysis
+from data.data_processor import DataProcessor
+from evaluation.qa_metrics import compute_all_qa_metrics
+from evaluation.hallucination import stratified_sample, run_hallucination_analysis
 
 def main():
     config.RESULTS_DIR.mkdir(parents=True, exist_ok=True)

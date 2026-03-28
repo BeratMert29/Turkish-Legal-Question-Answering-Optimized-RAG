@@ -8,10 +8,10 @@ _project_root = str(Path(__file__).parent.parent)
 if _project_root not in sys.path:
     sys.path.append(_project_root)
 import config
-from stage1_baseline.data.data_processor import DataProcessor
-from stage1_baseline.retrieval.embedder import Embedder
-from stage1_baseline.retrieval.retriever import Retriever
-from stage1_baseline.generation.rag_pipeline import RAGPipeline
+from data.data_processor import DataProcessor
+from retrieval.embedder import Embedder
+from retrieval.retriever import Retriever
+from generation.rag_pipeline import RAGPipeline
 
 def check_ollama():
     """Pre-flight: verify Ollama is running."""

@@ -11,12 +11,9 @@ import logging
 import sys
 from pathlib import Path
 
-# Ensure parent dir (where config.py lives) and this dir are on the path
 _HERE = Path(__file__).resolve().parent
-_PARENT = _HERE.parent
-for _p in (_PARENT, _HERE):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
 
 import config
 from data.data_processor import DataProcessor, CorpusChunk, QAExample
