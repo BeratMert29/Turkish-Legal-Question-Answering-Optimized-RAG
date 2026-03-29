@@ -13,6 +13,7 @@ from data.data_processor import DataProcessor
 from retrieval.embedder import Embedder
 from retrieval.retriever import Retriever
 from retrieval.bm25_retriever import BM25Index
+from retrieval.reranker import Reranker
 from evaluation.retrieval_metrics import compute_all_metrics
 
 
@@ -67,6 +68,38 @@ def main():
     )
     print(f"  Done in {time.time()-t0:.1f}s")
 
+    # ── RRF retrieval ────────────────────────────────────────────────────────
+    print(f"\nRRF retrieval for {len(qa_examples)} queries...")
+    t0 = time.time()
+    all_rrf = retriever.batch_rrf_retrieve(questions, bm25_index, top_k=config.TOP_K_RETRIEVAL)
+    print(f"  Done in {time.time()-t0:.1f}s")
+
+    # ── Load reranker (shared for all rerank modes) ──────────────────────────
+    print("\nLoading cross-encoder reranker...")
+    reranker = Reranker()
+    reranker.load_model()
+
+    # ── Dense + Rerank ───────────────────────────────────────────────────────
+    print(f"\nDense+Rerank retrieval for {len(qa_examples)} queries...")
+    t0 = time.time()
+    dense_cands = retriever.batch_retrieve(questions, top_k=config.RERANKER_CANDIDATES)
+    all_dense_rerank = reranker.batch_rerank(questions, dense_cands, top_k=config.TOP_K_RETRIEVAL)
+    print(f"  Done in {time.time()-t0:.1f}s")
+
+    # ── Hybrid + Rerank ──────────────────────────────────────────────────────
+    print(f"\nHybrid+Rerank retrieval for {len(qa_examples)} queries...")
+    t0 = time.time()
+    hybrid_cands = retriever.batch_hybrid_retrieve(questions, bm25_index, top_k=config.RERANKER_CANDIDATES)
+    all_hybrid_rerank = reranker.batch_rerank(questions, hybrid_cands, top_k=config.TOP_K_RETRIEVAL)
+    print(f"  Done in {time.time()-t0:.1f}s")
+
+    # ── RRF + Rerank ─────────────────────────────────────────────────────────
+    print(f"\nRRF+Rerank retrieval for {len(qa_examples)} queries...")
+    t0 = time.time()
+    rrf_cands = retriever.batch_rrf_retrieve(questions, bm25_index, top_k=config.RERANKER_CANDIDATES)
+    all_rrf_rerank = reranker.batch_rerank(questions, rrf_cands, top_k=config.TOP_K_RETRIEVAL)
+    print(f"  Done in {time.time()-t0:.1f}s")
+
     # ── Build metric results ─────────────────────────────────────────────────
     def build_results(all_retrieved):
         metric_results = []
@@ -93,42 +126,53 @@ def main():
     dense_metrics  = compute_all_metrics(dense_results)
     hybrid_metrics = compute_all_metrics(hybrid_results)
 
-    print(f"\n=== Dense Retrieval Metrics ===")
-    for k, v in dense_metrics.items():
-        print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
+    rrf_results,           rrf_full           = build_results(all_rrf)
+    dense_rerank_results,  dense_rerank_full  = build_results(all_dense_rerank)
+    hybrid_rerank_results, hybrid_rerank_full = build_results(all_hybrid_rerank)
+    rrf_rerank_results,    rrf_rerank_full    = build_results(all_rrf_rerank)
 
-    print(f"\n=== Hybrid Retrieval Metrics (alpha=0.7) ===")
-    for k, v in hybrid_metrics.items():
-        print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
+    rrf_metrics           = compute_all_metrics(rrf_results)
+    dense_rerank_metrics  = compute_all_metrics(dense_rerank_results)
+    hybrid_rerank_metrics = compute_all_metrics(hybrid_rerank_results)
+    rrf_rerank_metrics    = compute_all_metrics(rrf_rerank_results)
 
-    print(f"\n=== Dense vs Hybrid ===")
-    for k in sorted(set(dense_metrics) | set(hybrid_metrics)):
-        d = dense_metrics.get(k, "N/A")
-        h = hybrid_metrics.get(k, "N/A")
-        d_s = f"{d:.4f}" if isinstance(d, float) else str(d)
-        h_s = f"{h:.4f}" if isinstance(h, float) else str(h)
-        print(f"  {k:20s}  dense={d_s}  hybrid={h_s}")
+    all_modes = {
+        "dense":          dense_metrics,
+        "hybrid":         hybrid_metrics,
+        "rrf":            rrf_metrics,
+        "dense_rerank":   dense_rerank_metrics,
+        "hybrid_rerank":  hybrid_rerank_metrics,
+        "rrf_rerank":     rrf_rerank_metrics,
+    }
+
+    print(f"\n{'Mode':20s}  {'R@5':>8s}  {'R@10':>8s}  {'MRR':>8s}  {'nDCG@10':>8s}")
+    print("-" * 66)
+    for mode_name, m in all_modes.items():
+        print(f"  {mode_name:18s}  {m.get('recall_at_5',0):8.4f}  "
+              f"{m.get('recall_at_10',0):8.4f}  {m.get('mrr',0):8.4f}  "
+              f"{m.get('ndcg_at_10',0):8.4f}")
 
     # ── Save ─────────────────────────────────────────────────────────────────
     out = {
-        "metrics":           dense_metrics,    # legacy key for script 05
-        "hybrid_metrics":    hybrid_metrics,
-        "per_query_results": dense_results,
+        "dense_metrics":          dense_metrics,
+        "hybrid_metrics":         hybrid_metrics,
+        "rrf_metrics":            rrf_metrics,
+        "dense_rerank_metrics":   dense_rerank_metrics,
+        "hybrid_rerank_metrics":  hybrid_rerank_metrics,
+        "rrf_rerank_metrics":     rrf_rerank_metrics,
+        "per_query_results": {
+            "dense":          dense_results,
+            "hybrid":         hybrid_results,
+            "rrf":            rrf_results,
+            "dense_rerank":   dense_rerank_results,
+            "hybrid_rerank":  hybrid_rerank_results,
+            "rrf_rerank":     rrf_rerank_results,
+        },
     }
     results_path = config.RESULTS_DIR / "retrieval_results.json"
     with open(results_path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     print(f"\n  Saved: {results_path}")
-
-    full_path = config.RESULTS_DIR / "retrieval_full_results.json"
-    with open(full_path, "w", encoding="utf-8") as f:
-        json.dump(dense_full, f, ensure_ascii=False)
-    print(f"  Saved: {full_path}")
-
-    hybrid_full_path = config.RESULTS_DIR / "retrieval_hybrid_full_results.json"
-    with open(hybrid_full_path, "w", encoding="utf-8") as f:
-        json.dump(hybrid_full, f, ensure_ascii=False)
-    print(f"  Saved: {hybrid_full_path}")
 
     print("\nRetrieval evaluation complete")
 
