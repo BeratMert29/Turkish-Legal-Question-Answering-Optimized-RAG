@@ -1,4 +1,5 @@
 """Evaluate QA metrics and run hallucination analysis."""
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -7,14 +8,27 @@ if _project_root not in sys.path:
     sys.path.append(_project_root)
 import config
 from data.data_processor import DataProcessor
-from evaluation.qa_metrics import compute_all_qa_metrics
+from evaluation.qa_metrics import compute_all_qa_metrics_with_citation
 from evaluation.hallucination import stratified_sample, run_hallucination_analysis
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate QA metrics and hallucination")
+    parser.add_argument(
+        "--mode",
+        choices=["dense", "hybrid", "rrf", "rerank", "hybrid_rerank", "rrf_rerank"],
+        default="dense",
+        help="Retrieval mode (matches 04_generate_answers output file)",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     config.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     # Load predictions
-    predictions_path = config.RESULTS_DIR / "qa_predictions.jsonl"
+    predictions_path = config.RESULTS_DIR / f"qa_predictions_{args.mode}.jsonl"
     print(f"Loading predictions from {predictions_path}")
     predictions = DataProcessor.load_jsonl(predictions_path)
 
@@ -27,8 +41,16 @@ def main():
 
     # QA metrics
     print("\nComputing QA metrics...")
-    qa_input = [{"predicted": p["predicted"], "expected": p["expected"]} for p in valid]
-    qa_metrics = compute_all_qa_metrics(qa_input)
+    qa_input = [
+        {
+            "predicted": p["predicted"],
+            "expected": p["expected"],
+            "retrieved_sources": p.get("retrieved_sources", []),
+            "expected_source": p.get("expected_source", ""),
+        }
+        for p in valid
+    ]
+    qa_metrics = compute_all_qa_metrics_with_citation(qa_input)
     qa_metrics["error_count"] = len(errors)
 
     print(f"\n=== QA Metrics ===")
@@ -36,7 +58,7 @@ def main():
         print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
 
     # Save QA results
-    qa_results_path = config.RESULTS_DIR / "qa_results.json"
+    qa_results_path = config.RESULTS_DIR / f"qa_results_{args.mode}.json"
     with open(qa_results_path, "w", encoding="utf-8") as f:
         json.dump(qa_metrics, f, ensure_ascii=False, indent=2)
     print(f"\n  Saved: {qa_results_path}")
@@ -44,14 +66,8 @@ def main():
     # Hallucination analysis
     print("\nRunning hallucination analysis...")
 
-    # Load full retrieval results (for building context in faithfulness eval)
-    full_results_path = config.RESULTS_DIR / "retrieval_full_results.json"
-    if full_results_path.exists():
-        with open(full_results_path, "r", encoding="utf-8") as f:
-            retrieved_results = json.load(f)
-    else:
-        print("WARNING: retrieval_full_results.json not found; using retrieved_chunks from predictions")
-        retrieved_results = {p["query_id"]: p.get("retrieved_chunks", []) for p in valid}
+    # Use retrieved_chunks from predictions — these ARE the context chunks passed to the LLM
+    retrieved_results = {p["query_id"]: p.get("retrieved_chunks", []) for p in valid}
 
     # Load NLI model
     print("Loading NLI model: cross-encoder/nli-deberta-v3-small (~180 MB, first run downloads)")
@@ -71,7 +87,7 @@ def main():
     print(f"  By category: {summary['by_category']}")
 
     # Save
-    hall_path = config.RESULTS_DIR / "hallucination_results.json"
+    hall_path = config.RESULTS_DIR / f"hallucination_results_{args.mode}.json"
     with open(hall_path, "w", encoding="utf-8") as f:
         json.dump(hall_results, f, ensure_ascii=False, indent=2)
     print(f"\n  Saved: {hall_path}")
