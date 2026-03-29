@@ -46,7 +46,19 @@ def count_valid_lines(path) -> int:
             f.write("\n".join(lines[:count]) + ("\n" if count else ""))
     return count
 
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate answers for QA eval set")
+    parser.add_argument(
+        "--mode",
+        choices=["dense", "hybrid", "rrf", "rerank", "hybrid_rerank", "rrf_rerank"],
+        default="dense",
+        help="Retrieval mode (default: dense)",
+    )
+    return parser.parse_args()
+
 def main():
+    args = parse_args()
     check_ollama()
     config.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -56,7 +68,7 @@ def main():
     print(f"Loaded {len(eval_set)} QA examples")
 
     # Checkpoint/resume
-    predictions_path = config.RESULTS_DIR / "qa_predictions.jsonl"
+    predictions_path = config.RESULTS_DIR / f"qa_predictions_{args.mode}.jsonl"
     already_done = count_valid_lines(predictions_path)
     if already_done > 0:
         print(f"Resuming from checkpoint: {already_done}/{len(eval_set)} already done")
@@ -72,11 +84,42 @@ def main():
     retriever.load_index(index_path, metadata_path)
     pipeline = RAGPipeline(retriever)
 
+    # Build BM25 if needed
+    bm25_index = None
+    needs_bm25 = args.mode in ("hybrid", "rrf", "hybrid_rerank", "rrf_rerank")
+    if needs_bm25:
+        from retrieval.bm25_retriever import BM25Index
+        processor = DataProcessor(config.RAW_DATA_PATH)
+        processor.load_and_validate()
+        corpus_chunks = list(processor.build_corpus_chunks())
+        print(f"Building BM25 index over {len(corpus_chunks)} chunks...")
+        bm25_index = BM25Index()
+        bm25_index.build([{"text": c.text, "chunk_id": c.chunk_id} for c in corpus_chunks])
+
+    # Load reranker if needed
+    reranker = None
+    needs_rerank = args.mode in ("rerank", "hybrid_rerank", "rrf_rerank")
+    if needs_rerank:
+        from retrieval.reranker import Reranker
+        reranker = Reranker()
+        reranker.load_model()
+
     # Batch-retrieve all remaining questions at once (single embedding + index.search call)
     print(f"Batch-retrieving {len(remaining)} questions...")
     t0 = time.time()
     remaining_questions = [e['question'] for e in remaining]
-    all_retrieved = retriever.batch_retrieve(remaining_questions, top_k=config.TOP_K_RETRIEVAL)
+    initial_k = config.RERANKER_CANDIDATES if needs_rerank else config.TOP_K_RETRIEVAL
+    if args.mode in ("rrf", "rrf_rerank"):
+        all_retrieved = retriever.batch_rrf_retrieve(remaining_questions, bm25_index, top_k=initial_k)
+    elif args.mode in ("hybrid", "hybrid_rerank"):
+        all_retrieved = retriever.batch_hybrid_retrieve(remaining_questions, bm25_index, top_k=initial_k)
+    elif args.mode == "rerank":
+        all_retrieved = retriever.batch_retrieve(remaining_questions, top_k=config.RERANKER_CANDIDATES)
+    else:
+        all_retrieved = retriever.batch_retrieve(remaining_questions, top_k=config.TOP_K_RETRIEVAL)
+
+    if needs_rerank:
+        all_retrieved = reranker.batch_rerank(remaining_questions, all_retrieved, top_k=config.TOP_K_RETRIEVAL)
     print(f"  Retrieval done in {time.time()-t0:.1f}s")
 
     print(f"Generating {len(remaining)} answers...")
@@ -92,7 +135,8 @@ def main():
                     "question": example['question'],
                     "predicted": answer,
                     "expected": example['answer'],
-                    "sources": [c['source'] for c in context_chunks],
+                    "retrieved_sources": [c['source'] for c in context_chunks],
+                    "expected_source": example.get('source', ''),
                     "retrieved_chunks": [dict(c) for c in context_chunks],
                 }
             except Exception as e:
@@ -101,7 +145,8 @@ def main():
                     "question": example['question'],
                     "predicted": "",
                     "expected": example['answer'],
-                    "sources": [],
+                    "retrieved_sources": [],
+                    "expected_source": example.get('source', ''),
                     "retrieved_chunks": [],
                     "error": str(e),
                 }
