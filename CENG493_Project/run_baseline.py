@@ -74,26 +74,30 @@ def run_retrieval_eval(
     use_hybrid: bool = False,
     use_rerank: bool = False,
     bm25_index=None,
+    use_rrf: bool = False,
 ) -> tuple[dict, list[dict]]:
     log.info("Building ground-truth relevance map …")
     relevant_map = DataProcessor.build_relevant_chunk_map(corpus_chunks, qa_examples)
 
     questions = [qa.question for qa in qa_examples]
 
-    if use_hybrid and bm25_index is not None:
+    # Step 1: Initial retrieval
+    initial_k = config.RERANKER_CANDIDATES if use_rerank else config.TOP_K_RETRIEVAL
+    if use_rrf and bm25_index is not None:
+        log.info("Running RRF retrieval on %d queries …", len(qa_examples))
+        t0 = time.time()
+        all_retrieved = retriever.batch_rrf_retrieve(questions, bm25_index, top_k=initial_k)
+    elif use_hybrid and bm25_index is not None:
         log.info("Running HYBRID retrieval on %d queries …", len(qa_examples))
         t0 = time.time()
-        all_retrieved = retriever.batch_hybrid_retrieve(
-            questions, bm25_index, top_k=config.TOP_K_RETRIEVAL
-        )
+        all_retrieved = retriever.batch_hybrid_retrieve(questions, bm25_index, top_k=initial_k)
     elif use_rerank:
         log.info("Running DENSE+RERANK retrieval on %d queries …", len(qa_examples))
         from retrieval.reranker import Reranker
         reranker = Reranker()
         reranker.load_model()
         t0 = time.time()
-        candidates = retriever.batch_retrieve(questions, top_k=config.RERANKER_CANDIDATES)
-        all_retrieved = reranker.batch_rerank(questions, candidates, top_k=config.TOP_K_RETRIEVAL)
+        all_retrieved = retriever.batch_retrieve(questions, top_k=config.RERANKER_CANDIDATES)
     else:
         log.info("Running DENSE retrieval on %d queries …", len(qa_examples))
         t0 = time.time()
@@ -101,6 +105,13 @@ def run_retrieval_eval(
 
     retrieval_time = round(time.time() - t0, 2)
     log.info("  Retrieval done in %.1fs", retrieval_time)
+
+    # Step 2: Optional rerank (for hybrid+rerank and rrf+rerank combos)
+    if use_rerank and (use_hybrid or use_rrf):
+        from retrieval.reranker import Reranker
+        reranker = Reranker()
+        reranker.load_model()
+        all_retrieved = reranker.batch_rerank(questions, all_retrieved, top_k=config.TOP_K_RETRIEVAL)
 
     results = []
     for qa, retrieved_chunks in zip(qa_examples, all_retrieved):
@@ -123,14 +134,16 @@ def run_generation_eval(
     use_hybrid: bool = False,
     use_rerank: bool = False,
     bm25_index=None,
+    use_rrf: bool = False,
 ) -> tuple[dict, list[dict]]:
     log.info("Batch-retrieving %d queries …", len(qa_examples))
     questions = [qa.question for qa in qa_examples]
 
-    if use_hybrid and bm25_index is not None:
-        all_retrieved = pipeline.retriever.batch_hybrid_retrieve(
-            questions, bm25_index, top_k=config.TOP_K_RETRIEVAL
-        )
+    initial_k = config.RERANKER_CANDIDATES if use_rerank else config.TOP_K_RETRIEVAL
+    if use_rrf and bm25_index is not None:
+        all_retrieved = pipeline.retriever.batch_rrf_retrieve(questions, bm25_index, top_k=initial_k)
+    elif use_hybrid and bm25_index is not None:
+        all_retrieved = pipeline.retriever.batch_hybrid_retrieve(questions, bm25_index, top_k=initial_k)
     elif use_rerank:
         from retrieval.reranker import Reranker
         reranker = Reranker()
@@ -139,6 +152,12 @@ def run_generation_eval(
         all_retrieved = reranker.batch_rerank(questions, candidates, top_k=config.TOP_K_RETRIEVAL)
     else:
         all_retrieved = pipeline.retriever.batch_retrieve(questions, top_k=config.TOP_K_RETRIEVAL)
+
+    if use_rerank and (use_hybrid or use_rrf):
+        from retrieval.reranker import Reranker
+        reranker = Reranker()
+        reranker.load_model()
+        all_retrieved = reranker.batch_rerank(questions, all_retrieved, top_k=config.TOP_K_RETRIEVAL)
 
     log.info("Running generation on %d examples …", len(qa_examples))
     predictions = []
@@ -218,12 +237,14 @@ def main() -> None:
                         help="Use BM25+dense hybrid retrieval instead of dense-only")
     parser.add_argument("--rerank", action="store_true",
                         help="Apply cross-encoder reranker after dense retrieval")
+    parser.add_argument("--rrf", action="store_true",
+                        help="Use RRF (Reciprocal Rank Fusion) of BM25+dense instead of linear blend")
     parser.add_argument("--results-dir", type=Path, default=config.RESULTS_DIR,
                         help="Directory to write baseline_metrics.json")
     args = parser.parse_args()
 
-    if args.hybrid and args.rerank:
-        parser.error("--hybrid and --rerank are mutually exclusive")
+    if args.hybrid and args.rrf:
+        parser.error("--hybrid and --rrf are mutually exclusive (both are BM25+dense fusion strategies)")
 
     set_seeds(42)
 
@@ -250,7 +271,7 @@ def main() -> None:
 
     # BM25 index (built once, used for hybrid retrieval)
     bm25_index = None
-    if args.hybrid:
+    if args.hybrid or args.rrf:
         from retrieval.bm25_retriever import BM25Index
         log.info("Building BM25 index over %d chunks …", len(corpus_chunks))
         bm25_index = BM25Index()
@@ -259,7 +280,13 @@ def main() -> None:
     qa_examples: list[QAExample] = processor.build_qa_eval_set()
 
     # Determine retrieval mode label
-    if args.hybrid:
+    if args.rrf and args.rerank:
+        retrieval_mode = "rrf_rerank"
+    elif args.hybrid and args.rerank:
+        retrieval_mode = "hybrid_rerank"
+    elif args.rrf:
+        retrieval_mode = "rrf"
+    elif args.hybrid:
         retrieval_mode = "hybrid_bm25_dense"
     elif args.rerank:
         retrieval_mode = "dense_rerank"
@@ -270,6 +297,7 @@ def main() -> None:
     retrieval_metrics, retrieval_results = run_retrieval_eval(
         retriever, qa_examples, corpus_chunks,
         use_hybrid=args.hybrid, use_rerank=args.rerank, bm25_index=bm25_index,
+        use_rrf=args.rrf,
     )
 
     qa_metrics: dict = {}
@@ -287,6 +315,7 @@ def main() -> None:
             qa_metrics, predictions = run_generation_eval(
                 pipeline, qa_examples,
                 use_hybrid=args.hybrid, use_rerank=args.rerank, bm25_index=bm25_index,
+                use_rrf=args.rrf,
             )
             hallucination = run_hallucination_eval(predictions)
     else:
