@@ -93,9 +93,6 @@ def run_retrieval_eval(
         all_retrieved = retriever.batch_hybrid_retrieve(questions, bm25_index, top_k=initial_k)
     elif use_rerank:
         log.info("Running DENSE+RERANK retrieval on %d queries …", len(qa_examples))
-        from retrieval.reranker import Reranker
-        reranker = Reranker()
-        reranker.load_model()
         t0 = time.time()
         all_retrieved = retriever.batch_retrieve(questions, top_k=config.RERANKER_CANDIDATES)
     else:
@@ -106,8 +103,8 @@ def run_retrieval_eval(
     retrieval_time = round(time.time() - t0, 2)
     log.info("  Retrieval done in %.1fs", retrieval_time)
 
-    # Step 2: Optional rerank (for hybrid+rerank and rrf+rerank combos)
-    if use_rerank and (use_hybrid or use_rrf):
+    # Step 2: Rerank all candidates (covers dense+rerank, hybrid+rerank, rrf+rerank)
+    if use_rerank:
         from retrieval.reranker import Reranker
         reranker = Reranker()
         reranker.load_model()
@@ -145,15 +142,11 @@ def run_generation_eval(
     elif use_hybrid and bm25_index is not None:
         all_retrieved = pipeline.retriever.batch_hybrid_retrieve(questions, bm25_index, top_k=initial_k)
     elif use_rerank:
-        from retrieval.reranker import Reranker
-        reranker = Reranker()
-        reranker.load_model()
-        candidates = pipeline.retriever.batch_retrieve(questions, top_k=config.RERANKER_CANDIDATES)
-        all_retrieved = reranker.batch_rerank(questions, candidates, top_k=config.TOP_K_RETRIEVAL)
+        all_retrieved = pipeline.retriever.batch_retrieve(questions, top_k=config.RERANKER_CANDIDATES)
     else:
         all_retrieved = pipeline.retriever.batch_retrieve(questions, top_k=config.TOP_K_RETRIEVAL)
 
-    if use_rerank and (use_hybrid or use_rrf):
+    if use_rerank:
         from retrieval.reranker import Reranker
         reranker = Reranker()
         reranker.load_model()
