@@ -1,4 +1,5 @@
 """Generate answers for test set via Ollama. Supports checkpoint/resume."""
+import argparse
 import json
 import sys
 import time
@@ -47,7 +48,6 @@ def count_valid_lines(path) -> int:
     return count
 
 def parse_args():
-    import argparse
     parser = argparse.ArgumentParser(description="Generate answers for QA eval set")
     parser.add_argument(
         "--mode",
@@ -114,9 +114,9 @@ def main():
     elif args.mode in ("hybrid", "hybrid_rerank"):
         all_retrieved = retriever.batch_hybrid_retrieve(remaining_questions, bm25_index, top_k=initial_k)
     elif args.mode == "rerank":
-        all_retrieved = retriever.batch_retrieve(remaining_questions, top_k=config.RERANKER_CANDIDATES)
+        all_retrieved = retriever.batch_retrieve(remaining_questions, top_k=initial_k)
     else:
-        all_retrieved = retriever.batch_retrieve(remaining_questions, top_k=config.TOP_K_RETRIEVAL)
+        all_retrieved = retriever.batch_retrieve(remaining_questions, top_k=initial_k)
 
     if needs_rerank:
         all_retrieved = reranker.batch_rerank(remaining_questions, all_retrieved, top_k=config.TOP_K_RETRIEVAL)
