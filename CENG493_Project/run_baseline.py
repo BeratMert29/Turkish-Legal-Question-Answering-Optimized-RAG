@@ -234,6 +234,11 @@ def main() -> None:
                         help="Use RRF (Reciprocal Rank Fusion) of BM25+dense instead of linear blend")
     parser.add_argument("--results-dir", type=Path, default=config.RESULTS_DIR,
                         help="Directory to write baseline_metrics.json")
+    parser.add_argument(
+        "--hmgs",
+        action="store_true",
+        help="Use HMGS exam questions instead of Kaggle eval set",
+    )
     args = parser.parse_args()
 
     if args.hybrid and args.rrf:
@@ -270,7 +275,11 @@ def main() -> None:
         bm25_index = BM25Index()
         bm25_index.build([{"text": c.text, "chunk_id": c.chunk_id} for c in corpus_chunks])
 
-    qa_examples: list[QAExample] = processor.build_qa_eval_set()
+    if args.hmgs:
+        qa_examples = processor.build_gold_eval_set()
+        log.info("Using HMGS eval set: %d examples", len(qa_examples))
+    else:
+        qa_examples = processor.build_qa_eval_set()
 
     # Determine retrieval mode label
     if args.rrf and args.rerank:
@@ -304,7 +313,7 @@ def main() -> None:
                 config.LLM_BASE_URL, config.LLM_MODEL,
             )
         else:
-            pipeline = RAGPipeline(retriever)
+            pipeline = RAGPipeline(retriever, short_answer_mode=args.hmgs)
             qa_metrics, predictions = run_generation_eval(
                 pipeline, qa_examples,
                 use_hybrid=args.hybrid, use_rerank=args.rerank, bm25_index=bm25_index,

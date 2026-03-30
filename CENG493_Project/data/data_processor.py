@@ -191,6 +191,64 @@ class DataProcessor:
         df = self.get_qa_split("train")
         return self._rows_to_qa_examples(df)
 
+    @staticmethod
+    def build_gold_eval_set(hmgs_path=None) -> list[QAExample]:
+        """Load the HMGS gold test set, filtered to laws present in the corpus.
+
+        Reads the HMGS CSV, maps kaynak names to corpus source names via
+        config.HMGS_SOURCE_MAP, and drops rows whose kaynak has no corpus
+        counterpart (no chunks to retrieve against).
+
+        Args:
+            hmgs_path: Path to the HMGS CSV. Defaults to config.HMGS_DATA_PATH.
+
+        Returns:
+            List of QAExample whose source matches a corpus source.
+        """
+        import logging
+        log = logging.getLogger(__name__)
+
+        if hmgs_path is None:
+            hmgs_path = config.HMGS_DATA_PATH
+        df = pd.read_csv(hmgs_path, encoding="utf-8-sig")
+
+        required = {"soru", "cevap", "kaynak"}
+        missing = required - set(df.columns)
+        if missing:
+            raise ValueError(f"HMGS CSV is missing columns: {missing}")
+
+        source_map = getattr(config, "HMGS_SOURCE_MAP", {})
+        examples: list[QAExample] = []
+        skipped = 0
+
+        for i, row in enumerate(df.itertuples(index=False)):
+            raw = row._asdict()
+
+            def _str(val):
+                return "" if pd.isna(val) else str(val)
+
+            kaynak = _str(raw.get("kaynak", ""))
+            mapped_source = source_map.get(kaynak)
+            if mapped_source is None:
+                skipped += 1
+                continue
+
+            examples.append(QAExample(
+                query_id=f"hmgs_{i:04d}",
+                question=_str(raw.get("soru", "")),
+                answer=_str(raw.get("cevap", "")),
+                context="",
+                source=mapped_source,
+                data_type=_str(raw.get("veri türü", "")),
+            ))
+
+        if skipped:
+            log.info(
+                "build_gold_eval_set: kept %d, skipped %d (no corpus match)",
+                len(examples), skipped,
+            )
+        return examples
+
     # ------------------------------------------------------------------
     # Ground-truth relevance map
     # ------------------------------------------------------------------

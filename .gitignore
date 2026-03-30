@@ -6,3 +6,6 @@ CENG493_Project/results/
 # Dataset artifacts under data/; keep Python modules tracked
 CENG493_Project/data/*
 !CENG493_Project/data/*.py
+
+# Assignment PDF — keep local only
+CENG493_Project_Assignment_Turkish_Legal_RAG.pdf

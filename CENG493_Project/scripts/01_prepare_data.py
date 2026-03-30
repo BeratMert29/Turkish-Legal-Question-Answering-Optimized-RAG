@@ -29,6 +29,15 @@ def main():
     DataProcessor.save_jsonl(eval_set, eval_path)
     print(f"  → {len(eval_set)} examples written to {eval_path} ({time.time()-t0:.1f}s)")
 
+    # Build HMGS gold eval set
+    if config.HMGS_DATA_PATH.exists():
+        hmgs_set = dp.build_gold_eval_set()
+        hmgs_path = config.PROCESSED_DIR / config.HMGS_GOLD_FILE
+        DataProcessor.save_jsonl(hmgs_set, hmgs_path)
+        print(f"  HMGS gold: {len(hmgs_set)} examples → {hmgs_path}")
+    else:
+        print(f"  SKIPPED HMGS: {config.HMGS_DATA_PATH} not found")
+
     # Build QA train set
     print("Building QA train set...")
     t0 = time.time()

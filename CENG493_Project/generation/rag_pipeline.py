@@ -8,17 +8,25 @@ Yanıtında hangi kaynağı ([Kaynak N]) kullandığını belirt.
 Eğer bağlam bilgisi soruyu yanıtlamak için yetersizse, bunu açıkça belirt ve tahmin yürütme.
 Yanıtını Türkçe ver."""
 
+SHORT_ANSWER_PROMPT = """Sen bir Türk hukuku uzmanısın.
+Aşağıdaki bağlam bilgilerini kullanarak soruyu KISA ve NET şekilde yanıtla.
+Yanıtın yalnızca tek bir cümle, sayı veya kavram içermelidir.
+Gereksiz açıklama yapma. Yanıtını Türkçe ver."""
+
 class RAGPipeline:
     def __init__(self, retriever,
                  model: str = config.LLM_MODEL,
                  temperature: float = config.LLM_TEMPERATURE,
                  max_tokens: int = config.LLM_MAX_TOKENS,
                  top_k_for_generation: int = config.TOP_K_FOR_GENERATION,
-                 context_window_chars: int = config.CONTEXT_WINDOW_CHARS):
+                 context_window_chars: int = config.CONTEXT_WINDOW_CHARS,
+                 short_answer_mode: bool = False):
         self.retriever = retriever
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self._system_prompt = SHORT_ANSWER_PROMPT if short_answer_mode else TURKISH_PROMPT
+        self._effective_max_tokens = config.LLM_SHORT_ANSWER_MAX_TOKENS if short_answer_mode else max_tokens
         self.top_k_for_generation = top_k_for_generation
         self.context_window_chars = context_window_chars
         self._client = openai.OpenAI(
@@ -55,9 +63,9 @@ class RAGPipeline:
         response = self._client.chat.completions.create(
             model=self.model,
             temperature=self.temperature,
-            max_tokens=self.max_tokens,
+            max_tokens=self._effective_max_tokens,
             messages=[
-                {"role": "system", "content": TURKISH_PROMPT},
+                {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": f"Bağlam:\n{context}\n\nSoru: {question}"},
             ],
         )

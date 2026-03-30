@@ -55,6 +55,12 @@ def parse_args():
         default="dense",
         help="Retrieval mode (default: dense)",
     )
+    parser.add_argument(
+        "--dataset",
+        choices=["kaggle", "hmgs"],
+        default="kaggle",
+        help="Evaluation dataset to use (default: kaggle)",
+    )
     return parser.parse_args()
 
 def main():
@@ -63,12 +69,18 @@ def main():
     config.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     # Load eval set
-    eval_path = config.PROCESSED_DIR / config.QA_GOLD_FILE
+    if args.dataset == "hmgs":
+        eval_path = config.PROCESSED_DIR / config.HMGS_GOLD_FILE
+        short_answer_mode = True
+        predictions_path = config.RESULTS_DIR / f"qa_predictions_{args.mode}_hmgs.jsonl"
+    else:
+        eval_path = config.PROCESSED_DIR / config.QA_GOLD_FILE
+        short_answer_mode = False
+        predictions_path = config.RESULTS_DIR / f"qa_predictions_{args.mode}.jsonl"
     eval_set = DataProcessor.load_jsonl(eval_path)
     print(f"Loaded {len(eval_set)} QA examples")
 
     # Checkpoint/resume
-    predictions_path = config.RESULTS_DIR / f"qa_predictions_{args.mode}.jsonl"
     already_done = count_valid_lines(predictions_path)
     if already_done > 0:
         print(f"Resuming from checkpoint: {already_done}/{len(eval_set)} already done")
@@ -82,7 +94,7 @@ def main():
     embedder.load_model()
     retriever = Retriever(embedder)
     retriever.load_index(index_path, metadata_path)
-    pipeline = RAGPipeline(retriever)
+    pipeline = RAGPipeline(retriever, short_answer_mode=short_answer_mode)
 
     # Build BM25 if needed
     bm25_index = None

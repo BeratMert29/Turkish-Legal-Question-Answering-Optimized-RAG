@@ -17,6 +17,22 @@ INDEX_FILE = "faiss.index"
 METADATA_FILE = "metadata.jsonl"
 RESULTS_DIR = BASE_DIR / "results/stage1"
 
+# HMGS gold test set
+HMGS_DATA_PATH = BASE_DIR.parent / "hmgs_2025_240_only_correct_answers_v2.csv"
+HMGS_GOLD_FILE = "qa_hmgs.jsonl"
+HMGS_EVAL_EXPECTED = 116
+LLM_SHORT_ANSWER_MAX_TOKENS = 64
+
+# HMGS kaynak -> corpus source name mapping (only laws present in corpus)
+HMGS_SOURCE_MAP = {
+    "1982 Anayasası": "Türkiye Cumhuriyeti Anayasası",
+    "4721 sayılı Türk Medeni Kanunu": "Türk Medeni Kanunu",
+    "5237 sayılı Türk Ceza Kanunu": "Türk Ceza Kanunu",
+    "5271 sayılı Ceza Muhakemesi Kanunu": "Ceza Muhakemesi Kanunu",
+    "6098 sayılı Türk Borçlar Kanunu": "Türk Borçlar Kanunu",
+    "4857 sayılı İş Kanunu": "Türkiye Cumhuriyeti İş Kanunu",
+}
+
 # Embedding
 EMBEDDING_MODEL = "intfloat/multilingual-e5-large"
 EMBEDDING_DIM = 1024

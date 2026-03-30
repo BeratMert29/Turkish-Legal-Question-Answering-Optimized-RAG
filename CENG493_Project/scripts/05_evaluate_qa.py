@@ -20,15 +20,22 @@ def parse_args():
         default="dense",
         help="Retrieval mode (matches 04_generate_answers output file)",
     )
+    parser.add_argument(
+        "--dataset",
+        choices=["kaggle", "hmgs"],
+        default="kaggle",
+        help="Evaluation dataset to use (default: kaggle)",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     config.RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    suffix = "_hmgs" if args.dataset == "hmgs" else ""
 
     # Load predictions
-    predictions_path = config.RESULTS_DIR / f"qa_predictions_{args.mode}.jsonl"
+    predictions_path = config.RESULTS_DIR / f"qa_predictions_{args.mode}{suffix}.jsonl"
     print(f"Loading predictions from {predictions_path}")
     predictions = DataProcessor.load_jsonl(predictions_path)
 
@@ -58,7 +65,7 @@ def main():
         print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
 
     # Save QA results
-    qa_results_path = config.RESULTS_DIR / f"qa_results_{args.mode}.json"
+    qa_results_path = config.RESULTS_DIR / f"qa_results_{args.mode}{suffix}.json"
     with open(qa_results_path, "w", encoding="utf-8") as f:
         json.dump(qa_metrics, f, ensure_ascii=False, indent=2)
     print(f"\n  Saved: {qa_results_path}")
@@ -87,7 +94,7 @@ def main():
     print(f"  By category: {summary['by_category']}")
 
     # Save
-    hall_path = config.RESULTS_DIR / f"hallucination_results_{args.mode}.json"
+    hall_path = config.RESULTS_DIR / f"hallucination_results_{args.mode}{suffix}.json"
     with open(hall_path, "w", encoding="utf-8") as f:
         json.dump(hall_results, f, ensure_ascii=False, indent=2)
     print(f"\n  Saved: {hall_path}")
