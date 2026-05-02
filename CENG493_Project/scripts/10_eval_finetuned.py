@@ -1,3 +1,6 @@
+import os, sys
+if sys.platform == "darwin":
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
 """
 Stage 1 Fine-tuned LLM Evaluation
 Runs QA evaluation using the fine-tuned LoRA model (Transformers/PEFT, not Ollama)

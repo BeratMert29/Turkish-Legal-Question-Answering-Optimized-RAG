@@ -8,6 +8,9 @@ Usage:
     python run_baseline.py --eval --results-dir results/stage1
 """
 
+import os, sys
+if sys.platform == "darwin":
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
 import argparse
 import json
 import logging

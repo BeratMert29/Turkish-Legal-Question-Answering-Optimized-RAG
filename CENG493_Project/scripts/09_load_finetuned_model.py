@@ -1,5 +1,7 @@
+import os, sys
+if sys.platform == "darwin":
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
 import argparse
-import sys
 from pathlib import Path
 
 _project_root = str(Path(__file__).parent.parent)
