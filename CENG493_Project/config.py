@@ -34,7 +34,7 @@ HMGS_SOURCE_MAP = {
 }
 
 # Embedding
-EMBEDDING_MODEL = "intfloat/multilingual-e5-large"
+EMBEDDING_MODEL = "BAAI/bge-m3"
 EMBEDDING_DIM = 1024
 EMBEDDING_BATCH_SIZE = 32
 

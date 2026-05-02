@@ -17,7 +17,9 @@ class Embedder:
                  device: str = None):
         self.model_name = model_name
         self.batch_size = batch_size
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = device
         self.model = None  # loaded lazily via load_model()
 
     def load_model(self) -> None:
@@ -27,15 +29,18 @@ class Embedder:
     def encode(self, texts: list[str], is_query: bool = False,
                show_progress: bool = True) -> np.ndarray:
         """
-        Encode texts with E5 prefix convention.
-        is_query=True  → prepends "query: "
-        is_query=False → prepends "passage: "
+        Applies E5 query/passage prefixes only for E5 models; BGE-M3 and others receive raw text.
+        is_query=True  → prepends "query: " (E5 only)
+        is_query=False → prepends "passage: " (E5 only)
         Returns (N, 1024) float32, explicitly L2-normalized.
         """
         if self.model is None:
             raise RuntimeError("Call load_model() before encode()")
-        prefix = "query: " if is_query else "passage: "
-        prefixed = [prefix + t for t in texts]
+        if "e5" in self.model_name.lower():
+            prefix = "query: " if is_query else "passage: "
+            prefixed = [prefix + t for t in texts]
+        else:
+            prefixed = texts
         embeddings = self.model.encode(
             prefixed,
             batch_size=self.batch_size,

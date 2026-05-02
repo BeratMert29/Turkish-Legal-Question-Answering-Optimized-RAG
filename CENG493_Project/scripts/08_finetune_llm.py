@@ -50,7 +50,7 @@ TRAINING_CONFIG = {
         "learning_rate": 2e-4,
         "warmup_ratio": 0.03,
         "lr_scheduler_type": "cosine",
-        "max_length": 320,
+        "max_length": 1024,
         "dataset_text_field": "text",
         "logging_steps": 10,
         "save_strategy": "epoch",
@@ -76,9 +76,15 @@ def load_jsonl(path: Path) -> list[dict]:
 
 
 def format_as_chat(example: dict, tokenizer) -> str:
+    question = example.get("question", "")
+    context = example.get("context", "")
+    if context and context.strip():
+        user_content = f"Baglam:\n{context.strip()}\n\nSoru: {question}"
+    else:
+        user_content = question
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": example["question"]},
+        {"role": "user", "content": user_content},
         {"role": "assistant", "content": example["answer"]},
     ]
     # add_generation_prompt=False because the assistant turn is already included
