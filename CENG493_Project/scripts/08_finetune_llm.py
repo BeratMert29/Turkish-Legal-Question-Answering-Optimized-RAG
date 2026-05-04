@@ -189,6 +189,10 @@ def main() -> None:
     print("\nPreparing formatted dataset ...")
     formatted_texts = [format_as_chat(r, tokenizer) for r in raw_records]
     hf_dataset = Dataset.from_dict({"text": formatted_texts})
+    split = hf_dataset.train_test_split(test_size=0.1, seed=42)
+    hf_dataset = split["train"]
+    eval_dataset = split["test"]
+    print(f"  Train: {len(hf_dataset)}, Val: {len(eval_dataset)}")
 
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=TRAINING_CONFIG["qlora"]["load_in_4bit"],
@@ -242,6 +246,8 @@ def main() -> None:
         lr_scheduler_type=tc["lr_scheduler_type"],
         logging_steps=tc["logging_steps"],
         save_strategy=tc["save_strategy"],
+        evaluation_strategy="steps",
+        eval_steps=50,
         fp16=tc["fp16"],
         bf16=tc["bf16"],
         optim=tc["optim"],
@@ -258,6 +264,7 @@ def main() -> None:
         model=model,
         args=training_args,
         train_dataset=hf_dataset,
+        eval_dataset=eval_dataset,
         processing_class=tokenizer,
     )
 
