@@ -22,16 +22,31 @@ def _classify_result(result: dict) -> str:
 
 def stratified_sample(results: list[dict], sample_size: int = config.HALLUCINATION_SAMPLE_SIZE) -> dict:
     """
-    Stratify results into hits/partial/misses and sample up to sample_size//3 from each.
-    Compensates if a category is smaller than target.
+    Stratify results into hits/partial/misses using percentile-based thresholds
+    (scale-invariant across RRF, reranker, and dense scores) and sample up to
+    sample_size//3 from each. Compensates if a category is smaller than target.
     Returns: {"hits": [...], "partial": [...], "misses": [...]}
     """
-    hits, partial, misses = [], [], []
+    random.seed(42)
+
+    scores = []
     for r in results:
-        cat = _classify_result(r)
-        if cat == "hit":
+        chunks = r.get("retrieved_chunks", [])
+        scores.append(chunks[0]["score"] if chunks else float("-inf"))
+
+    sorted_scores = sorted(scores)
+    n = len(sorted_scores)
+    if n >= 3:
+        low_threshold = sorted_scores[n // 3]
+        high_threshold = sorted_scores[2 * n // 3]
+    else:
+        low_threshold = high_threshold = 0.0
+
+    hits, partial, misses = [], [], []
+    for r, score in zip(results, scores):
+        if score >= high_threshold:
             hits.append(r)
-        elif cat == "partial":
+        elif score >= low_threshold:
             partial.append(r)
         else:
             misses.append(r)
