@@ -161,8 +161,12 @@ class FinetunedRAGPipeline:
                 pad_token_id=self.tokenizer.eos_token_id,
             )
 
-        generated = output_ids[0][inputs["input_ids"].shape[1]:]
-        return self.tokenizer.decode(generated, skip_special_tokens=True).strip()
+        generated = output_ids[0][inputs["input_ids"].shape[1]:].clone()
+        result = self.tokenizer.decode(generated, skip_special_tokens=True).strip()
+        # Free intermediate tensors to prevent GPU memory accumulation during batch eval
+        del inputs, output_ids, generated
+        torch.cuda.empty_cache()
+        return result
 
     def _inject_citations(self, answer: str, chunks: list) -> str:
         """Append [Kaynak N] markers to sentences that have significant token overlap
@@ -299,13 +303,18 @@ def main() -> None:
         return
 
     if args.demo:
+        from retrieval.embedder import Embedder
         from retrieval.retriever import Retriever
 
         print(f"Adapter dir : {adapter_dir}")
         print(f"Question    : {args.demo}")
         print()
 
-        retriever = Retriever()
+        embedder = Embedder()
+        embedder.load_model()
+        retriever = Retriever(embedder,
+                              index_path=config.INDEX_DIR / config.INDEX_FILE,
+                              metadata_path=config.INDEX_DIR / config.METADATA_FILE)
 
         pipeline = FinetunedRAGPipeline(
             retriever=retriever,

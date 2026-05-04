@@ -77,7 +77,8 @@ def load_jsonl(path: Path) -> list[dict]:
 
 def format_as_chat(example: dict, tokenizer) -> str:
     question = example.get("question", "")
-    context = example.get("context", "")
+    ctx = example.get("context_str", "") or example.get("context", "")
+    context = ctx
     if context and context.strip():
         user_content = f"Baglam:\n{context.strip()}\n\nSoru: {question}"
     else:

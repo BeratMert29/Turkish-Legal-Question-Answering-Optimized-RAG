@@ -4,7 +4,6 @@ if sys.platform == "darwin":
     os.environ.setdefault("OMP_NUM_THREADS", "1")
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 from tqdm import tqdm
