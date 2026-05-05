@@ -54,6 +54,7 @@ def main():
             "expected": p["expected"],
             "retrieved_sources": p.get("retrieved_sources", []),
             "expected_source": p.get("expected_source", ""),
+            "retrieved_chunks": p.get("retrieved_chunks", []),
         }
         for p in valid
     ]

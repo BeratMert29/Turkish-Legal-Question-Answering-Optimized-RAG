@@ -16,6 +16,11 @@ INDEX_DIR = BASE_DIR / "index"
 INDEX_FILE = "faiss.index"
 METADATA_FILE = "metadata.jsonl"
 RESULTS_DIR = BASE_DIR / "results/stage1"
+RESULTS_DIR_BASE     = BASE_DIR / "results" / "stage_base"
+RESULTS_DIR_EMB_FT   = BASE_DIR / "results" / "stage_emb_finetuned"
+RESULTS_DIR_RERANK   = BASE_DIR / "results" / "stage_reranker"
+RESULTS_DIR_LLM_FT   = BASE_DIR / "results" / "stage_llm_finetuned"
+RESULTS_DIR_FULL     = BASE_DIR / "results" / "stage_full_optimized"
 
 # HMGS gold test set
 HMGS_DATA_PATH = BASE_DIR.parent / "hmgs_2025_240_only_correct_answers_v2.csv"
@@ -34,7 +39,8 @@ HMGS_SOURCE_MAP = {
 }
 
 # Embedding
-EMBEDDING_MODEL = "intfloat/multilingual-e5-large"
+EMBEDDING_MODEL = "BAAI/bge-m3"
+FINETUNED_EMBEDDING_MODEL = str(BASE_DIR / "models" / "bge-m3-turkish-legal")
 EMBEDDING_DIM = 1024
 EMBEDDING_BATCH_SIZE = 32
 
@@ -50,6 +56,7 @@ RRF_K = 60                 # RRF smoothing constant
 
 # LLM (Ollama — free, no API key)
 LLM_MODEL = "qwen2.5:7b"
+LLM_FINETUNED_MODEL = "qwen25-legal-ft"   # created by scripts/13_export_lora_to_ollama.py
 LLM_BASE_URL = "http://localhost:11434/v1"
 LLM_API_KEY = "ollama"
 LLM_TEMPERATURE = 0.0

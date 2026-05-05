@@ -7,14 +7,18 @@ Usage:
     python scripts/10_eval_finetuned.py
 """
 
-import os
+import os, sys
+if sys.platform == "darwin":
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
 
+# TRL reads Jinja templates without explicit encoding; on Windows with Turkish locale
+# (cp1254) this crashes. Force UTF-8 before any trl/transformers import.
 os.environ.setdefault("PYTHONUTF8", "1")
 
 import importlib.util
 import logging
-import sys
 from pathlib import Path
+
 
 # ---------------------------------------------------------------------------
 # Project root on sys.path

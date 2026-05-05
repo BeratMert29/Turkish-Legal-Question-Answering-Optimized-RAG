@@ -1,5 +1,7 @@
+import os, sys
+if sys.platform == "darwin":
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
 import argparse
-import sys
 from pathlib import Path
 
 _project_root = str(Path(__file__).parent.parent)
@@ -7,35 +9,10 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 import config
+from generation.rag_pipeline import TURKISH_PROMPT, SHORT_ANSWER_PROMPT
 
 HF_MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
 DEFAULT_ADAPTER_DIR = config.BASE_DIR / "models" / "qwen25_lora"
-
-TURKISH_PROMPT = """Sen Türk hukuku alanında uzman bir hukuki asistansın. Görevin, yalnızca aşağıda numaralandırılmış [Kaynak N] bağlamlarını kullanarak soruyu eksiksiz ve doğru biçimde yanıtlamaktır.
-
-ZORUNLU KURALLAR:
-1. Yanıtını YALNIZCA verilen [Kaynak N] kaynaklarına dayandır. Kendi arka plan bilginden veya bağlamda yer almayan hiçbir bilgiden yararlanma.
-2. İlgili her atıfta kanun adını VE madde numarasını açıkça belirt (örnek: "Türk Medeni Kanunu Madde 997", "Türk Ceza Kanunu Madde 53").
-3. Birden fazla kaynak ilgiliyse hepsini sentezle ve [Kaynak N] numarasıyla göster.
-4. Kaynaklar arasında çelişki varsa çelişkiyi açıkça ifade et ve her iki görüşü kaynak numarasıyla aktar.
-5. Bağlam soruyu yanıtlamak için yetersizse "Sağlanan bağlam bu soruyu yanıtlamak için yeterli değildir." yaz; asla tahmin yürütme veya uydurma.
-
-YANIT YAPISI:
-- İlk cümle: Sorunun doğrudan yanıtı.
-- Devamı: Hukuki dayanak — ilgili kanun adı, madde numarası ve bağlamdan alınan açıklama.
-- Sonuç: Varsa pratik sonuç veya ek uyarı.
-
-Yanıtını yalnızca Türkçe ver."""
-
-SHORT_ANSWER_PROMPT = """Sen Türk hukuku alanında uzman bir hukuki asistansın. Sana bir soru ve bağlam verilecektir.
-
-ZORUNLU KURALLAR:
-1. Yanıtın yalnızca TEK bir ifade, sayı veya hukuki kavramdan oluşmalıdır — cümle kurma, açıklama yapma, gerekçe gösterme.
-2. Yanıtı doğrudan bağlamdan çıkar; kendi bilgini kullanma.
-3. Yanıt bağlamda yoksa yalnızca şunu yaz: Bilgi yok
-4. Fazladan kelime, noktalama veya açıklama ekleme.
-
-Yanıtını yalnızca Türkçe ver."""
 
 
 def print_export_steps(adapter_dir: Path) -> None:
@@ -184,8 +161,12 @@ class FinetunedRAGPipeline:
                 pad_token_id=self.tokenizer.eos_token_id,
             )
 
-        generated = output_ids[0][inputs["input_ids"].shape[1]:]
-        return self.tokenizer.decode(generated, skip_special_tokens=True).strip()
+        generated = output_ids[0][inputs["input_ids"].shape[1]:].clone()
+        result = self.tokenizer.decode(generated, skip_special_tokens=True).strip()
+        # Free intermediate tensors to prevent GPU memory accumulation during batch eval
+        del inputs, output_ids, generated
+        torch.cuda.empty_cache()
+        return result
 
     def _inject_citations(self, answer: str, chunks: list) -> str:
         """Append [Kaynak N] markers to sentences that have significant token overlap
@@ -322,13 +303,18 @@ def main() -> None:
         return
 
     if args.demo:
+        from retrieval.embedder import Embedder
         from retrieval.retriever import Retriever
 
         print(f"Adapter dir : {adapter_dir}")
         print(f"Question    : {args.demo}")
         print()
 
-        retriever = Retriever()
+        embedder = Embedder()
+        embedder.load_model()
+        retriever = Retriever(embedder,
+                              index_path=config.INDEX_DIR / config.INDEX_FILE,
+                              metadata_path=config.INDEX_DIR / config.METADATA_FILE)
 
         pipeline = FinetunedRAGPipeline(
             retriever=retriever,

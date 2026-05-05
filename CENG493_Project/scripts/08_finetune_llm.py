@@ -50,7 +50,7 @@ TRAINING_CONFIG = {
         "learning_rate": 2e-4,
         "warmup_ratio": 0.03,
         "lr_scheduler_type": "cosine",
-        "max_length": 320,
+        "max_length": 1024,
         "dataset_text_field": "text",
         "logging_steps": 10,
         "save_strategy": "epoch",
@@ -76,9 +76,16 @@ def load_jsonl(path: Path) -> list[dict]:
 
 
 def format_as_chat(example: dict, tokenizer) -> str:
+    question = example.get("question", "")
+    ctx = example.get("context_str", "") or example.get("context", "")
+    context = ctx
+    if context and context.strip():
+        user_content = f"Baglam:\n{context.strip()}\n\nSoru: {question}"
+    else:
+        user_content = question
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": example["question"]},
+        {"role": "user", "content": user_content},
         {"role": "assistant", "content": example["answer"]},
     ]
     # add_generation_prompt=False because the assistant turn is already included
@@ -183,6 +190,10 @@ def main() -> None:
     print("\nPreparing formatted dataset ...")
     formatted_texts = [format_as_chat(r, tokenizer) for r in raw_records]
     hf_dataset = Dataset.from_dict({"text": formatted_texts})
+    split = hf_dataset.train_test_split(test_size=0.1, seed=42)
+    hf_dataset = split["train"]
+    eval_dataset = split["test"]
+    print(f"  Train: {len(hf_dataset)}, Val: {len(eval_dataset)}")
 
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=TRAINING_CONFIG["qlora"]["load_in_4bit"],
@@ -236,6 +247,8 @@ def main() -> None:
         lr_scheduler_type=tc["lr_scheduler_type"],
         logging_steps=tc["logging_steps"],
         save_strategy=tc["save_strategy"],
+        evaluation_strategy="steps",
+        eval_steps=50,
         fp16=tc["fp16"],
         bf16=tc["bf16"],
         optim=tc["optim"],
@@ -252,6 +265,7 @@ def main() -> None:
         model=model,
         args=training_args,
         train_dataset=hf_dataset,
+        eval_dataset=eval_dataset,
         processing_class=tokenizer,
     )
 

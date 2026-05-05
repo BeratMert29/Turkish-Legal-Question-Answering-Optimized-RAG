@@ -8,11 +8,13 @@ Usage:
     python run_baseline.py --eval --results-dir results/stage1
 """
 
+import os, sys
+if sys.platform == "darwin":
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
 import argparse
 import json
 import logging
 import time
-import sys
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -75,6 +77,7 @@ def run_retrieval_eval(
     use_rerank: bool = False,
     bm25_index=None,
     use_rrf: bool = False,
+    reranker=None,
 ) -> tuple[dict, list[dict]]:
     log.info("Building ground-truth relevance map …")
     relevant_map = DataProcessor.build_relevant_chunk_map(corpus_chunks, qa_examples)
@@ -105,9 +108,10 @@ def run_retrieval_eval(
 
     # Step 2: Rerank all candidates (covers dense+rerank, hybrid+rerank, rrf+rerank)
     if use_rerank:
-        from retrieval.reranker import Reranker
-        reranker = Reranker()
-        reranker.load_model()
+        if reranker is None:
+            from retrieval.reranker import Reranker
+            reranker = Reranker()
+            reranker.load_model()
         all_retrieved = reranker.batch_rerank(questions, all_retrieved, top_k=config.TOP_K_RETRIEVAL)
 
     results = []
@@ -132,6 +136,7 @@ def run_generation_eval(
     use_rerank: bool = False,
     bm25_index=None,
     use_rrf: bool = False,
+    reranker=None,
 ) -> tuple[dict, list[dict]]:
     log.info("Batch-retrieving %d queries …", len(qa_examples))
     questions = [qa.question for qa in qa_examples]
@@ -147,9 +152,10 @@ def run_generation_eval(
         all_retrieved = pipeline.retriever.batch_retrieve(questions, top_k=config.TOP_K_RETRIEVAL)
 
     if use_rerank:
-        from retrieval.reranker import Reranker
-        reranker = Reranker()
-        reranker.load_model()
+        if reranker is None:
+            from retrieval.reranker import Reranker
+            reranker = Reranker()
+            reranker.load_model()
         all_retrieved = reranker.batch_rerank(questions, all_retrieved, top_k=config.TOP_K_RETRIEVAL)
 
     log.info("Running generation on %d examples …", len(qa_examples))
@@ -295,11 +301,19 @@ def main() -> None:
     else:
         retrieval_mode = "dense"
 
+    # --- Load reranker once if needed (shared by retrieval + generation eval) ---
+    reranker = None
+    if args.rerank:
+        from retrieval.reranker import Reranker
+        log.info("Loading cross-encoder reranker …")
+        reranker = Reranker()
+        reranker.load_model()
+
     # --- Retrieval metrics ---
     retrieval_metrics, retrieval_results = run_retrieval_eval(
         retriever, qa_examples, corpus_chunks,
         use_hybrid=args.hybrid, use_rerank=args.rerank, bm25_index=bm25_index,
-        use_rrf=args.rrf,
+        use_rrf=args.rrf, reranker=reranker,
     )
 
     qa_metrics: dict = {}
@@ -317,7 +331,7 @@ def main() -> None:
             qa_metrics, predictions = run_generation_eval(
                 pipeline, qa_examples,
                 use_hybrid=args.hybrid, use_rerank=args.rerank, bm25_index=bm25_index,
-                use_rrf=args.rrf,
+                use_rrf=args.rrf, reranker=reranker,
             )
             hallucination = run_hallucination_eval(predictions)
     else:

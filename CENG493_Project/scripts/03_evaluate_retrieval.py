@@ -1,4 +1,7 @@
 """Evaluate retrieval quality using context-hash ground truth + BM25 hybrid."""
+import os, sys
+if sys.platform == "darwin":
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
 import json
 import time
 import sys

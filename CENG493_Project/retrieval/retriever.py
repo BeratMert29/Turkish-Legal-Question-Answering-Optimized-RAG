@@ -49,6 +49,11 @@ class Retriever:
             raise ValueError(
                 f"Index/metadata mismatch: {self.index.ntotal} vectors vs {len(self.metadata)} metadata entries"
             )
+        if self.index.d != config.EMBEDDING_DIM:
+            raise ValueError(
+                f"Index dimension mismatch: index has d={self.index.d}, config expects {config.EMBEDDING_DIM}. "
+                f"Rebuild the index with the current embedding model."
+            )
 
     def retrieve(self, query: str, top_k: int = config.TOP_K_RETRIEVAL) -> list[RetrievedChunk]:
         """Retrieve top_k chunks for a single query."""
@@ -108,6 +113,12 @@ class Retriever:
         if candidate_pool is None:
             candidate_pool = config.RERANKER_CANDIDATES
 
+        if len(bm25_index.metadata) != len(self.metadata):
+            raise ValueError(
+                f"BM25/FAISS metadata count mismatch: {len(bm25_index.metadata)} vs {len(self.metadata)}. "
+                f"Rebuild both indices from the same corpus."
+            )
+
         q_emb = self.embedder.encode([query], is_query=True, show_progress=False)
         dense_scores_raw, dense_indices_raw = self.index.search(q_emb.astype(np.float32), candidate_pool)
 
@@ -157,6 +168,12 @@ class Retriever:
             top_k = config.TOP_K_RETRIEVAL
         if candidate_pool is None:
             candidate_pool = config.RERANKER_CANDIDATES
+
+        if len(bm25_index.metadata) != len(self.metadata):
+            raise ValueError(
+                f"BM25/FAISS metadata count mismatch: {len(bm25_index.metadata)} vs {len(self.metadata)}. "
+                f"Rebuild both indices from the same corpus."
+            )
 
         q_embs = self.embedder.encode(queries, is_query=True)
         dense_scores_all, dense_indices_all = self.index.search(q_embs.astype(np.float32), candidate_pool)
@@ -215,6 +232,12 @@ class Retriever:
             rrf_k = config.RRF_K
         if candidate_pool is None:
             candidate_pool = config.RERANKER_CANDIDATES
+
+        if len(bm25_index.metadata) != len(self.metadata):
+            raise ValueError(
+                f"BM25/FAISS metadata count mismatch: {len(bm25_index.metadata)} vs {len(self.metadata)}. "
+                f"Rebuild both indices from the same corpus."
+            )
 
         q_embs = self.embedder.encode(queries, is_query=True)
         dense_scores_all, dense_indices_all = self.index.search(
