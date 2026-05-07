@@ -11,7 +11,12 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+if torch.cuda.is_available():
+    _DEVICE = "cuda"
+elif torch.backends.mps.is_available():
+    _DEVICE = "mps"
+else:
+    _DEVICE = "cpu"
 
 
 def _cosine_sim(a: np.ndarray, b: np.ndarray) -> float:

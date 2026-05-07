@@ -63,7 +63,7 @@ RERANKER_CANDIDATES = 50   # initial dense/RRF pool before cross-encoder re-rank
 RRF_K = 60                 # RRF smoothing constant
 
 # LLM (Ollama — free, no API key)
-LLM_MODEL = "qwen2.5:7b"
+LLM_MODEL = "gemma3:12b"
 LLM_FINETUNED_MODEL = "qwen25-legal-ft"   # created by scripts/13_export_lora_to_ollama.py
 LLM_BASE_URL = "http://localhost:11434/v1"
 LLM_API_KEY = "ollama"

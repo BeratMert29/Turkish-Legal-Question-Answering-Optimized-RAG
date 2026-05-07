@@ -18,7 +18,12 @@ class Embedder:
         self.model_name = model_name
         self.batch_size = batch_size
         if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
         self.device = device
         self.model = None  # loaded lazily via load_model()
 
@@ -68,7 +73,12 @@ class BGEM3Embedder:
         self.model_name = model_name or config.EMBEDDING_MODEL
         self.batch_size = batch_size or config.EMBEDDING_BATCH_SIZE
         if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
         self.device = device
         self.model = None  # loaded lazily via load_model()
 

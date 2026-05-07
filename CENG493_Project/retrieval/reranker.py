@@ -9,7 +9,12 @@ class Reranker:
     def __init__(self, model_name: str = None, batch_size: int = 64):
         self.model_name = model_name or config.RERANKER_MODEL
         self.batch_size = batch_size
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            self.device = "cuda"
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = "cpu"
         self.model: CrossEncoder | None = None
 
     def load_model(self) -> None:

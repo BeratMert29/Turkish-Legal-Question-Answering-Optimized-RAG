@@ -328,7 +328,12 @@ def run_stage(
     print(f"  Hallucination analysis …")
     import torch
     from sentence_transformers import CrossEncoder
-    _nli_device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        _nli_device = "cuda"
+    elif torch.backends.mps.is_available():
+        _nli_device = "mps"
+    else:
+        _nli_device = "cpu"
     if not hasattr(run_stage, "_nli_model"):
         print("    Loading NLI model …")
         run_stage._nli_model = CrossEncoder("cross-encoder/nli-deberta-v3-small", device=_nli_device)

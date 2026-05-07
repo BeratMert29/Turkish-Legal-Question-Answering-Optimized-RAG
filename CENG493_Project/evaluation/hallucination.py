@@ -3,7 +3,12 @@ import torch
 import config
 from scipy.special import softmax as scipy_softmax
 
-_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+if torch.cuda.is_available():
+    _DEVICE = "cuda"
+elif torch.backends.mps.is_available():
+    _DEVICE = "mps"
+else:
+    _DEVICE = "cpu"
 
 
 def _classify_result(result: dict) -> str:

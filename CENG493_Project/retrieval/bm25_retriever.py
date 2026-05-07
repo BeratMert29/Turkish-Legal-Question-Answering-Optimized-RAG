@@ -4,6 +4,15 @@ from rank_bm25 import BM25Okapi
 from utils import normalize_turkish
 import config
 
+try:
+    from snowballstemmer import stemmer as _snowball_stemmer
+    _TR_STEMMER = _snowball_stemmer("turkish")
+    def _stem(token: str) -> str:
+        return _TR_STEMMER.stemWord(token)
+except ImportError:
+    def _stem(token: str) -> str:
+        return token
+
 import nltk
 try:
     _STOPWORDS = set(nltk.corpus.stopwords.words('turkish'))
@@ -16,7 +25,7 @@ except LookupError:
 
 
 def tokenize(text: str) -> list[str]:
-    return [w for w in normalize_turkish(text).split() if len(w) >= config.BM25_MIN_TOKEN_LENGTH and w not in _STOPWORDS]
+    return [_stem(w) for w in normalize_turkish(text).split() if len(w) >= config.BM25_MIN_TOKEN_LENGTH and w not in _STOPWORDS]
 
 
 class BM25Index:
