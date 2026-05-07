@@ -12,6 +12,12 @@ except Exception:
     _USE_HF_EVALUATE = False
 
 _CITATION_PATTERN = re.compile(r"\[\s*kaynak\s+(\d+)\s*\]", re.IGNORECASE)
+_STRIP_CITATION_PATTERN = re.compile(r"\[\s*kaynak\s+\d+\s*\]", re.IGNORECASE)
+
+
+def strip_citations(text: str) -> str:
+    """Remove [Kaynak N] markers from text before F1/EM comparison."""
+    return _STRIP_CITATION_PATTERN.sub("", text).strip()
 
 
 def _tokenize(text: str) -> list[str]:
@@ -171,11 +177,14 @@ def rouge_l_score(predicted: str, expected: str) -> float:
 
 
 def compute_qa_metrics(predicted: str, expected: str) -> dict:
+    # Strip citation markers from predicted before lexical comparison;
+    # citations inflate token count and suppress F1/EM vs. citation-free expected.
+    pred_clean = strip_citations(predicted)
     return {
-        "em": exact_match(predicted, expected),
-        "f1": token_f1(predicted, expected),
-        "bleu": bleu_score(predicted, expected),
-        "rouge_l": rouge_l_score(predicted, expected),
+        "em": exact_match(pred_clean, expected),
+        "f1": token_f1(pred_clean, expected),
+        "bleu": bleu_score(pred_clean, expected),
+        "rouge_l": rouge_l_score(pred_clean, expected),
     }
 
 
@@ -263,12 +272,13 @@ def compute_all_qa_metrics_with_citation(predictions: list[dict]) -> dict:
     result = {k: sum(m[k] for m in qa_metrics) / n for k in keys}
     # Corpus-level BLEU via evaluate
     if _USE_HF_EVALUATE:
-        preds_norm = [normalize_turkish(p["predicted"]) for p in predictions]
+        preds_norm = [normalize_turkish(strip_citations(p["predicted"])) for p in predictions]
         refs_norm = [[normalize_turkish(p["expected"])] for p in predictions]
         bleu_result = _BLEU_METRIC.compute(predictions=preds_norm, references=refs_norm)
         result["bleu"] = float(bleu_result["bleu"])
     else:
-        result["bleu"] = _corpus_bleu_fallback(predictions)
+        stripped = [{**p, "predicted": strip_citations(p["predicted"])} for p in predictions]
+        result["bleu"] = _corpus_bleu_fallback(stripped)
     result["citation_accuracy"] = sum(cite_scores) / n
     result["source_in_context_rate"] = sum(source_proxy_scores) / n
     result["citation_presence_rate"] = sum(citation_presence_scores) / n

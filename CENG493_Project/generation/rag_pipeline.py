@@ -64,7 +64,9 @@ class RAGPipeline:
         running_len = 0
         for i, chunk in enumerate(selected):
             part = f"[Kaynak {i+1}] ({chunk['source']})\n{chunk['text']}\n\n"
-            if running_len + len(part) > self.context_window_chars:
+            # Always include the first chunk even if it exceeds the window;
+            # stop before adding subsequent chunks that would overflow.
+            if i > 0 and running_len + len(part) > self.context_window_chars:
                 break
             parts.append(part)
             included.append(chunk)
