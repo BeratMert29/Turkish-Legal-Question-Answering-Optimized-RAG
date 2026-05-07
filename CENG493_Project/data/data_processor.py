@@ -362,6 +362,11 @@ class DataProcessor:
             if not relevant:
                 relevant = [c.chunk_id for c in corpus_chunks if c.doc_id == qa.query_id]
 
+            # Strategy 3: source match — for gold sets without context (e.g. HMGS)
+            # All chunks from the matching law are considered relevant.
+            if not relevant and qa.source:
+                relevant = [c.chunk_id for c in by_source.get(qa.source, [])]
+
             if not relevant:
                 no_match_count += 1
 

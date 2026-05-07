@@ -29,17 +29,36 @@ def compute_all_metrics(results: list[dict]) -> dict:
         run_dict[qid] = {str(doc_id): 1.0 / (rank + 1) for rank, doc_id in enumerate(retrieved)}
 
     if not qrels_dict:
-        return {"recall_at_5": 0.0, "recall_at_10": 0.0, "mrr": 0.0, "ndcg_at_10": 0.0, "num_queries": 0}
+        return {"recall_at_5": 0.0, "recall_at_10": 0.0, "mrr": 0.0, "ndcg_at_10": 0.0, "source_hit_at_5": 0.0, "source_hit_at_10": 0.0, "num_queries": 0}
 
     qrels = Qrels(qrels_dict)
     run = Run(run_dict)
 
     raw = ranx_evaluate(qrels, run, ["recall@5", "recall@10", "mrr", "ndcg@10"])
 
+    # source_hit_at_k: fraction of queries where at least one retrieved
+    # chunk (top-k) is in the relevant set.  More interpretable than
+    # recall when relevance is defined at source (law) level.
+    hit_at_5 = 0
+    hit_at_10 = 0
+    for r in results:
+        qid = str(r["query_id"])
+        if qid not in qrels_dict:
+            continue
+        relevant_set = set(str(d) for d in r.get("relevant", []))
+        retrieved = [str(d) for d in r.get("retrieved", [])]
+        if set(retrieved[:5]) & relevant_set:
+            hit_at_5 += 1
+        if set(retrieved[:10]) & relevant_set:
+            hit_at_10 += 1
+    n = len(qrels_dict)
+
     return {
-        "recall_at_5":  float(raw["recall@5"]),
-        "recall_at_10": float(raw["recall@10"]),
-        "mrr":          float(raw["mrr"]),
-        "ndcg_at_10":   float(raw["ndcg@10"]),
-        "num_queries":  len(qrels_dict),
+        "recall_at_5":      float(raw["recall@5"]),
+        "recall_at_10":     float(raw["recall@10"]),
+        "mrr":              float(raw["mrr"]),
+        "ndcg_at_10":       float(raw["ndcg@10"]),
+        "source_hit_at_5":  hit_at_5 / n,
+        "source_hit_at_10": hit_at_10 / n,
+        "num_queries":      len(qrels_dict),
     }
