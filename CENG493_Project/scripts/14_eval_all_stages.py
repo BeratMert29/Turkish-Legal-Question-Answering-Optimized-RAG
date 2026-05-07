@@ -30,7 +30,6 @@ Available stages:
 import argparse
 import json
 import os
-import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -50,12 +49,20 @@ from data.data_processor import DataProcessor
 from evaluation.hallucination import run_hallucination_analysis, stratified_sample
 from evaluation.qa_metrics import compute_all_qa_metrics_with_citation
 from evaluation.retrieval_metrics import compute_all_metrics
+from evaluation.llm_judge import (
+    llm_judge_answer,
+    llm_judge_faithfulness,
+    llm_judge_relevancy,
+    llm_judge_coherence,
+)
+from evaluation.semantic_similarity import compute_semantic_similarity
+from evaluation.final_score import compute_all_scenario_scores
 from generation.rag_pipeline import RAGPipeline, TURKISH_PROMPT, SHORT_ANSWER_PROMPT
 from retrieval.bm25_retriever import BM25Index
 from retrieval.embedder import Embedder
 from retrieval.reranker import Reranker
 from retrieval.retriever import Retriever
-from utils import check_ollama, set_seeds
+from utils import check_ollama, inject_citations, set_seeds
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -139,55 +146,6 @@ STAGE_REGISTRY: dict[str, StageConfig] = {
 
 # ordered list for display / default run
 DEFAULT_STAGE_ORDER = ["base", "hybrid", "rrf", "rrf_rerank", "llm_ft", "emb_ft", "full"]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Citation injection (post-hoc, overlap-based)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _inject_citations(answer: str, chunks: list) -> str:
-    """Append [Kaynak N] markers using token-overlap heuristic."""
-    THRESHOLD = 0.15
-
-    def _tok(text: str) -> set:
-        return {t.lower() for t in re.split(r"[\s\.,;:!?()\[\]{}'\"]+", text) if t}
-
-    def _overlap(a: set, b: set) -> float:
-        return len(a & b) / min(len(a), len(b)) if a and b else 0.0
-
-    sents = [s for s in re.split(r"(?<=[.!?])\s+", answer) if s.strip()]
-    if not sents or not chunks:
-        return answer
-
-    sent_toks = [_tok(s) for s in sents]
-    pending: list[tuple[int, int, float]] = []
-
-    for ci, chunk in enumerate(chunks):
-        chunk_toks = _tok(chunk.get("text", ""))
-        best_score, best_si = 0.0, -1
-        for si, st in enumerate(sent_toks):
-            sc = _overlap(st, chunk_toks)
-            if sc > best_score:
-                best_score, best_si = sc, si
-        if best_score >= THRESHOLD and best_si >= 0:
-            pending.append((best_si, ci + 1, best_score))
-
-    if not pending:
-        return answer
-
-    from collections import defaultdict
-    s2l: dict = defaultdict(list)
-    for si, lbl, _ in pending:
-        s2l[si].append(lbl)
-
-    parts = []
-    for i, sent in enumerate(sents):
-        if i in s2l:
-            tags = " ".join(f"[Kaynak {lbl}]" for lbl in sorted(s2l[i]))
-            parts.append(f"{sent} {tags}")
-        else:
-            parts.append(sent)
-    return " ".join(parts)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -341,7 +299,7 @@ def run_stage(
             ctx, ctx_chunks = pipeline.assemble_context(chunks)
             answer = pipeline.generate(qa.question, ctx)
             if stage.inject_citations:
-                answer = _inject_citations(answer, ctx_chunks)
+                answer = inject_citations(answer, ctx_chunks)
             predictions.append({
                 "query_id": qa.query_id,
                 "predicted": answer,
@@ -368,16 +326,77 @@ def run_stage(
 
     # ── Hallucination ──────────────────────────────────────────────────────
     print(f"  Hallucination analysis …")
+    import torch
     from sentence_transformers import CrossEncoder
+    _nli_device = "cuda" if torch.cuda.is_available() else "cpu"
     if not hasattr(run_stage, "_nli_model"):
         print("    Loading NLI model …")
-        run_stage._nli_model = CrossEncoder("cross-encoder/nli-deberta-v3-small")
+        run_stage._nli_model = CrossEncoder("cross-encoder/nli-deberta-v3-small", device=_nli_device)
     nli_model = run_stage._nli_model  # reuse across stages
 
     sample = stratified_sample(predictions, config.HALLUCINATION_SAMPLE_SIZE)
     hall = run_hallucination_analysis(sample, full_retrieved, nli_model)
     faithful_rate = hall["summary"].get("faithful_rate", 0.0)
     print(f"    Faithfulness={faithful_rate:.4f}")
+
+    # ── LLM Judge (sampled) ───────────────────────────────────────────────
+    print(f"  LLM Judge (sample={min(20, len(predictions))}) …")
+    llm_judge_score = None
+    llm_relevancy_score = None
+    llm_coherence_score = None
+    llm_faithfulness_score = None
+    try:
+        judge_preds = [
+            {**p, "question": next(
+                (qa.question for qa in qa_examples if qa.query_id == p["query_id"]),
+                p.get("query_id", "")
+            )}
+            for p in predictions
+        ]
+        judge_result     = llm_judge_answer(judge_preds, config.LLM_BASE_URL, config.LLM_MODEL, sample_size=20)
+        faith_result     = llm_judge_faithfulness(predictions, config.LLM_BASE_URL, config.LLM_MODEL, sample_size=20)
+        relev_result     = llm_judge_relevancy(judge_preds, config.LLM_BASE_URL, config.LLM_MODEL, sample_size=20)
+        coher_result     = llm_judge_coherence(predictions, config.LLM_BASE_URL, config.LLM_MODEL, sample_size=20)
+        llm_judge_score          = judge_result["score"]
+        llm_faithfulness_score   = faith_result["score"]
+        llm_relevancy_score      = relev_result["score"]
+        llm_coherence_score      = coher_result["score"]
+        print(f"    LLM Judge Answer={llm_judge_score:.4f}  "
+              f"Faith={llm_faithfulness_score:.4f}  "
+              f"Relev={llm_relevancy_score:.4f}  "
+              f"Coher={llm_coherence_score:.4f}")
+    except Exception as exc:
+        print(f"    WARNING: LLM Judge failed: {exc}")
+
+    # ── Semantic Similarity ────────────────────────────────────────────────
+    print(f"  Semantic similarity …")
+    sem_sim = 0.0
+    try:
+        sem_result = compute_semantic_similarity(predictions)
+        sem_sim = sem_result["mean_similarity"]
+        print(f"    SemanticSim={sem_sim:.4f}")
+    except Exception as exc:
+        print(f"    WARNING: Semantic similarity failed: {exc}")
+
+    # ── Final Scenario Scores ──────────────────────────────────────────────
+    llm_scores_dict = {}
+    if llm_faithfulness_score is not None:
+        llm_scores_dict["faithfulness"] = llm_faithfulness_score
+    if llm_relevancy_score is not None:
+        llm_scores_dict["relevancy"] = llm_relevancy_score
+    if llm_coherence_score is not None:
+        llm_scores_dict["coherence"] = llm_coherence_score
+
+    scenario_scores = compute_all_scenario_scores(
+        retrieval_metrics=retrieval_metrics,
+        qa_metrics=qa_metrics,
+        faithfulness_score=faithful_rate,
+        semantic_similarity=sem_sim,
+        llm_scores=llm_scores_dict if llm_scores_dict else None,
+    )
+    print(f"    Scenario1={scenario_scores['scenario1']:.4f}  "
+          f"Scenario2={scenario_scores['scenario2']:.4f}  "
+          f"Scenario3={scenario_scores['scenario3']:.4f}")
 
     # ── Save ───────────────────────────────────────────────────────────────
     stage.results_dir.mkdir(parents=True, exist_ok=True)
@@ -401,6 +420,14 @@ def run_stage(
         "qa_metrics": qa_metrics,
         "hallucination_summary": hall.get("summary", {}),
         "faithfulness_rate": faithful_rate,
+        "llm_judge_score": llm_judge_score,
+        "llm_faithfulness_score": llm_faithfulness_score,
+        "llm_relevancy_score": llm_relevancy_score,
+        "llm_coherence_score": llm_coherence_score,
+        "semantic_similarity": sem_sim,
+        "scenario1_score": scenario_scores["scenario1"],
+        "scenario2_score": scenario_scores["scenario2"],
+        "scenario3_score": scenario_scores["scenario3"],
     }
 
     out_path = stage.results_dir / "baseline_metrics.json"
@@ -431,13 +458,14 @@ def print_ablation_table(results: dict[str, dict]) -> None:
 
     header = (
         f"| {'Stage':<26} | {'R@5':>6} | {'R@10':>6} | {'MRR':>6} | "
-        f"{'nDCG@10':>7} | {'F1':>6} | {'ROUGE-L':>7} | {'Citation':>8} | {'Faith.':>7} |"
+        f"{'nDCG@10':>7} | {'F1':>6} | {'ROUGE-L':>7} | {'Citation':>8} | {'Faith.':>7} | "
+        f"{'LLM-J':>6} | {'SemSim':>7} | {'Scen1':>7} | {'Scen2':>7} | {'Scen3':>7} |"
     )
-    sep = "|" + "|".join(["-"*w for w in [28, 8, 8, 8, 9, 8, 9, 10, 9]]) + "|"
+    sep = "|" + "|".join(["-"*w for w in [28, 8, 8, 8, 9, 8, 9, 10, 9, 8, 9, 9, 9, 9]]) + "|"
 
-    print("\n\n" + "="*90)
+    print("\n\n" + "="*120)
     print("  ABLATION TABLE")
-    print("="*90)
+    print("="*120)
     print(header)
     print(sep)
 
@@ -453,9 +481,14 @@ def print_ablation_table(results: dict[str, dict]) -> None:
             f"{_f4(ret.get('recall_at_10')):>6} | {_f4(ret.get('mrr')):>6} | "
             f"{_f4(ret.get('ndcg_at_10')):>7} | {_pct(qa.get('f1')):>6} | "
             f"{_pct(qa.get('rouge_l')):>7} | {_pct(qa.get('citation_accuracy')):>8} | "
-            f"{_pct(r.get('faithfulness_rate')):>7} |"
+            f"{_pct(r.get('faithfulness_rate')):>7} | "
+            f"{_f4(r.get('llm_judge_score')):>6} | "
+            f"{_f4(r.get('semantic_similarity')):>7} | "
+            f"{_f4(r.get('scenario1_score')):>7} | "
+            f"{_f4(r.get('scenario2_score')):>7} | "
+            f"{_f4(r.get('scenario3_score')):>7} |"
         )
-    print("="*90 + "\n")
+    print("="*120 + "\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
