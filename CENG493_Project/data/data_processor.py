@@ -121,6 +121,7 @@ class DataProcessor:
         Deduplicates by text hash so each unique legal passage appears once.
         build_relevant_chunk_map uses context-hash matching to correctly
         resolve the canonical chunk even when the query's row was deduplicated.
+        Also loads supplementary law texts from extra_laws.jsonl if present.
         """
         seen_hashes: set[str] = set()
         kept = 0
@@ -138,6 +139,30 @@ class DataProcessor:
                 seen_hashes.add(text_hash)
                 kept += 1
                 yield chunk
+
+        # Load supplementary law texts (HMK, TTK, İYUK, İİK, VUK, DMK, …)
+        extra_path = pathlib.Path(config.BASE_DIR) / "data" / "extra_laws.jsonl"
+        if extra_path.exists():
+            extra_kept = 0
+            with open(extra_path, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    entry = json.loads(line)
+                    text   = entry.get("text", "")
+                    source = entry.get("source", "")
+                    doc_id = entry.get("doc_id", "")
+                    for chunk in self.chunk_text(text, doc_id, source):
+                        text_hash = hashlib.md5(chunk.text.encode()).hexdigest()
+                        if text_hash in seen_hashes:
+                            skipped += 1
+                            continue
+                        seen_hashes.add(text_hash)
+                        kept += 1
+                        extra_kept += 1
+                        yield chunk
+            print(f"[build_corpus_chunks] extra_laws: +{extra_kept} chunks from supplementary laws")
 
         print(f"[build_corpus_chunks] kept={kept}, skipped={skipped} duplicate chunks")
 
@@ -217,9 +242,27 @@ class DataProcessor:
         if missing:
             raise ValueError(f"HMGS CSV is missing columns: {missing}")
 
+        import re as _re
+
+        # MC-reference answers reference exam option numbers (e.g. "Yalnız I",
+        # "I, II ve III") that are not present in the truncated question text.
+        # These cannot be evaluated with automatic metrics — always filtered.
+        _MC_RE = _re.compile(
+            r'^(Yalnız|Sadece)\s+(I{1,3}|IV|V)'
+            r'|^(I{1,3}|IV|V)\s*(,\s*(I{1,3}|IV|V))+'
+            r'|^(I{1,3}|IV|V)\s+ve\s+(I{1,3}|IV|V)',
+            _re.IGNORECASE,
+        )
+
+        # VUK rows are misattributed (3/5 questions are actually about HMK /
+        # Avukatlık Kanunu) — drop the entire source to avoid noise.
+        _DROPPED_SOURCES = {"213 sayılı Vergi Usul Kanunu"}
+
         source_map = getattr(config, "HMGS_SOURCE_MAP", {})
         examples: list[QAExample] = []
         skipped = 0
+        skipped_mc = 0
+        skipped_src = 0
 
         for i, row in enumerate(df.itertuples(index=False)):
             raw = row._asdict()
@@ -228,25 +271,34 @@ class DataProcessor:
                 return "" if pd.isna(val) else str(val)
 
             kaynak = _str(raw.get("kaynak", ""))
+
+            if kaynak in _DROPPED_SOURCES:
+                skipped_src += 1
+                continue
+
             mapped_source = source_map.get(kaynak)
             if mapped_source is None:
                 skipped += 1
                 continue
 
+            answer = _str(raw.get("cevap", ""))
+            if _MC_RE.match(answer.strip()):
+                skipped_mc += 1
+                continue
+
             examples.append(QAExample(
                 query_id=f"hmgs_{i:04d}",
                 question=_str(raw.get("soru", "")),
-                answer=_str(raw.get("cevap", "")),
+                answer=answer,
                 context="",
                 source=mapped_source,
                 data_type=_str(raw.get("veri türü", "")),
             ))
 
-        if skipped:
-            log.info(
-                "build_gold_eval_set: kept %d, skipped %d (no corpus match)",
-                len(examples), skipped,
-            )
+        log.info(
+            "build_gold_eval_set: kept=%d  dropped=no_corpus:%d  mc_ref:%d  noisy_src:%d",
+            len(examples), skipped, skipped_mc, skipped_src,
+        )
         return examples
 
     # ------------------------------------------------------------------
