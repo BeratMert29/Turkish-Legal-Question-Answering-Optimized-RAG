@@ -25,18 +25,26 @@ RESULTS_DIR_FULL     = BASE_DIR / "results" / "stage_full_optimized"
 # HMGS gold test set
 HMGS_DATA_PATH = BASE_DIR.parent / "hmgs_2025_240_only_correct_answers_v2.csv"
 HMGS_GOLD_FILE = "qa_hmgs.jsonl"
-HMGS_EVAL_EXPECTED = 116
 LLM_SHORT_ANSWER_MAX_TOKENS = 64
 
 # HMGS kaynak -> corpus source name mapping (only laws present in corpus)
 HMGS_SOURCE_MAP = {
-    "1982 Anayasası": "Türkiye Cumhuriyeti Anayasası",
-    "4721 sayılı Türk Medeni Kanunu": "Türk Medeni Kanunu",
-    "5237 sayılı Türk Ceza Kanunu": "Türk Ceza Kanunu",
+    # Original corpus laws
+    "1982 Anayasası":                     "Türkiye Cumhuriyeti Anayasası",
+    "4721 sayılı Türk Medeni Kanunu":     "Türk Medeni Kanunu",
+    "5237 sayılı Türk Ceza Kanunu":       "Türk Ceza Kanunu",
     "5271 sayılı Ceza Muhakemesi Kanunu": "Ceza Muhakemesi Kanunu",
-    "6098 sayılı Türk Borçlar Kanunu": "Türk Borçlar Kanunu",
-    "4857 sayılı İş Kanunu": "Türkiye Cumhuriyeti İş Kanunu",
+    "6098 sayılı Türk Borçlar Kanunu":    "Türk Borçlar Kanunu",
+    "4857 sayılı İş Kanunu":              "Türkiye Cumhuriyeti İş Kanunu",
+    # Supplementary laws (extra_laws.jsonl)
+    "6100 sayılı Hukuk Muhakemeleri Kanunu": "Hukuk Muhakemeleri Kanunu",
+    "6102 sayılı Türk Ticaret Kanunu":       "Türk Ticaret Kanunu",
+    "2577 sayılı İdari Yargılama Usulü Kanunu": "İdari Yargılama Usulü Kanunu",
+    "2004 sayılı İcra ve İflas Kanunu":      "İcra ve İflas Kanunu",
+    "213 sayılı Vergi Usul Kanunu":          "Vergi Usul Kanunu",
+    "657 sayılı Devlet Memurları Kanunu":    "Devlet Memurları Kanunu",
 }
+HMGS_EVAL_EXPECTED = 161  # 240 raw - 49 no corpus - 5 VUK (misattributed) - 25 MC-ref
 
 # Embedding
 EMBEDDING_MODEL = "BAAI/bge-m3"
@@ -47,11 +55,11 @@ EMBEDDING_BATCH_SIZE = 32
 # Retrieval
 TOP_K_RETRIEVAL = 10
 TOP_K_FOR_GENERATION = 5
-CONTEXT_WINDOW_CHARS = 8000
+CONTEXT_WINDOW_CHARS = 14000
 
 # Re-ranker (Stage 2 retrieval)
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
-RERANKER_CANDIDATES = 50   # initial dense/RRF pool before cross-encoder re-ranking
+RERANKER_CANDIDATES = 10   # initial dense/RRF pool before cross-encoder re-ranking
 RRF_K = 60                 # RRF smoothing constant
 
 # LLM (Ollama — free, no API key)

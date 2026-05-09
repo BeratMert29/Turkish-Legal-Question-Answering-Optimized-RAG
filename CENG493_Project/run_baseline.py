@@ -191,9 +191,16 @@ def run_generation_eval(
 
 def run_hallucination_eval(predictions: list[dict]) -> dict:
     try:
+        import torch
         from sentence_transformers import CrossEncoder
         log.info("Loading NLI model …")
-        nli_model = CrossEncoder("cross-encoder/nli-deberta-v3-small")
+        if torch.cuda.is_available():
+            _nli_device = "cuda"
+        elif torch.backends.mps.is_available():
+            _nli_device = "mps"
+        else:
+            _nli_device = "cpu"
+        nli_model = CrossEncoder("cross-encoder/nli-deberta-v3-small", device=_nli_device)
     except Exception as exc:
         log.warning("NLI model unavailable (%s); skipping hallucination analysis", exc)
         return {"summary": {"faithful_rate": None, "skipped": True}, "per_sample": []}

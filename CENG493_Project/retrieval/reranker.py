@@ -1,5 +1,6 @@
 """Cross-encoder re-ranker for second-stage retrieval."""
 import numpy as np
+import torch
 from sentence_transformers import CrossEncoder
 import config
 
@@ -8,10 +9,16 @@ class Reranker:
     def __init__(self, model_name: str = None, batch_size: int = 64):
         self.model_name = model_name or config.RERANKER_MODEL
         self.batch_size = batch_size
+        if torch.cuda.is_available():
+            self.device = "cuda"
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+        else:
+            self.device = "cpu"
         self.model: CrossEncoder | None = None
 
     def load_model(self) -> None:
-        self.model = CrossEncoder(self.model_name)
+        self.model = CrossEncoder(self.model_name, device=self.device)
 
     def rerank(self, query: str, chunks: list[dict],
                top_k: int = None) -> list[dict]:

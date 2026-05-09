@@ -1,6 +1,14 @@
 import random
+import torch
 import config
 from scipy.special import softmax as scipy_softmax
+
+if torch.cuda.is_available():
+    _DEVICE = "cuda"
+elif torch.backends.mps.is_available():
+    _DEVICE = "mps"
+else:
+    _DEVICE = "cpu"
 
 
 def _classify_result(result: dict) -> str:
@@ -161,12 +169,20 @@ def run_hallucination_analysis(
         })
 
     total = sum(c["total"] for c in by_category.values())
+    scores = [s["score"] for s in per_sample]
+    score_stats = {
+        "mean": float(np.mean(scores)) if scores else 0.0,
+        "min": float(np.min(scores)) if scores else 0.0,
+        "max": float(np.max(scores)) if scores else 0.0,
+        "std": float(np.std(scores)) if scores else 0.0,
+    }
     return {
         "summary": {
             "total": total,
             "faithful_count": faithful_count,
             "faithful_rate": faithful_count / total if total > 0 else 0.0,
             "by_category": by_category,
+            "score_stats": score_stats,
         },
         "per_sample": per_sample,
     }

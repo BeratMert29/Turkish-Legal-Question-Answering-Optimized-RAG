@@ -15,8 +15,11 @@ Output:
   models/bge-m3-turkish-legal/training_config.json  -- hyperparameters for reproducibility
 """
 import json
+import os
 import sys
 from pathlib import Path
+
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 _project_root = str(Path(__file__).parent.parent)
 if _project_root not in sys.path:
@@ -33,10 +36,11 @@ TRAINING_CONFIG = {
     "model_name": MODEL_NAME,
     "learning_rate": 1e-5,
     "epochs": 2,
-    "batch_size": 32,
+    "batch_size": 4,
+    "gradient_accumulation_steps": 8,
     "warmup_ratio": 0.1,
     "fp16": True,
-    "gradient_checkpointing": False,
+    "gradient_checkpointing": True,
     "eval_split": 0.05,
     "loss": "MultipleNegativesRankingLoss",
     "notes": (
@@ -118,6 +122,7 @@ def main() -> None:
         warmup_ratio=TRAINING_CONFIG["warmup_ratio"],
         fp16=TRAINING_CONFIG["fp16"],
         gradient_checkpointing=TRAINING_CONFIG["gradient_checkpointing"],
+        gradient_accumulation_steps=TRAINING_CONFIG["gradient_accumulation_steps"],
         logging_steps=10,
         save_strategy="epoch",
         eval_strategy="epoch",

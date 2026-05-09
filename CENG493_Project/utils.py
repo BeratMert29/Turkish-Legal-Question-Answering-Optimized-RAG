@@ -1,4 +1,5 @@
 """Shared utilities for the Turkish Legal RAG pipeline."""
+import re
 import unicodedata
 import random
 import numpy as np
@@ -28,6 +29,52 @@ def set_seeds(seed: int = 42) -> None:
             torch.cuda.manual_seed_all(seed)
     except ImportError:
         pass
+
+
+def inject_citations(answer: str, chunks: list) -> str:
+    """Append [Kaynak N] citation markers to answer sentences via token-overlap heuristic."""
+    THRESHOLD = 0.15
+
+    def _tok(text: str) -> set:
+        return {t.lower() for t in re.split(r"[\s\.,;:!?()\[\]{}'\"]+", text) if t}
+
+    def _overlap(a: set, b: set) -> float:
+        return len(a & b) / min(len(a), len(b)) if a and b else 0.0
+
+    sents = [s for s in re.split(r"(?<=[.!?])\s+", answer) if s.strip()]
+    if not sents or not chunks:
+        return answer
+
+    sent_toks = [_tok(s) for s in sents]
+    pending: list[tuple[int, int, float]] = []
+
+    for ci, chunk in enumerate(chunks):
+        raw = chunk.get("text", "") if isinstance(chunk, dict) else getattr(chunk, "text", "")
+        chunk_toks = _tok(raw)
+        best_score, best_si = 0.0, -1
+        for si, st in enumerate(sent_toks):
+            sc = _overlap(st, chunk_toks)
+            if sc > best_score:
+                best_score, best_si = sc, si
+        if best_score >= THRESHOLD and best_si >= 0:
+            pending.append((best_si, ci + 1, best_score))
+
+    if not pending:
+        return answer
+
+    from collections import defaultdict
+    s2l: dict = defaultdict(list)
+    for si, lbl, _ in pending:
+        s2l[si].append(lbl)
+
+    parts = []
+    for i, sent in enumerate(sents):
+        if i in s2l:
+            tags = " ".join(f"[Kaynak {lbl}]" for lbl in sorted(s2l[i]))
+            parts.append(f"{sent} {tags}")
+        else:
+            parts.append(sent)
+    return " ".join(parts)
 
 
 def check_ollama(base_url: str, model_name: str) -> bool:

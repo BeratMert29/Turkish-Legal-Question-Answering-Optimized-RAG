@@ -14,7 +14,7 @@ import config
 from data.data_processor import DataProcessor
 from retrieval.embedder import Embedder
 from retrieval.retriever import Retriever
-from generation.rag_pipeline import RAGPipeline
+from generation.rag_pipeline import RAGPipeline, ChunkExpander
 
 def check_ollama():
     """Pre-flight: verify Ollama is running."""
@@ -96,7 +96,8 @@ def main():
     embedder.load_model()
     retriever = Retriever(embedder)
     retriever.load_index(index_path, metadata_path)
-    pipeline = RAGPipeline(retriever, short_answer_mode=short_answer_mode)
+    expander = ChunkExpander(metadata_path)
+    pipeline = RAGPipeline(retriever, short_answer_mode=short_answer_mode, chunk_expander=expander)
 
     # Build BM25 if needed
     bm25_index = None

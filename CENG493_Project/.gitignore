@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Raw law PDFs (auto-downloadable, too large for git)
+data/raw_laws/*.pdf
+
+# Model checkpoints
+models/
+
+# FAISS index (reproducible from corpus)
+index/
+
+# Results
+results/
+
+# Data processed
+data/processed/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
