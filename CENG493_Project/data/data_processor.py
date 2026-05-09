@@ -362,6 +362,14 @@ class DataProcessor:
             if not relevant:
                 relevant = [c.chunk_id for c in corpus_chunks if c.doc_id == qa.query_id]
 
+            # Strategy 2.5: answer substring match — for gold sets with known answers (e.g. HMGS)
+            # Find chunks that contain a significant portion of the answer text.
+            if not relevant and qa.answer and len(qa.answer) >= 40:
+                answer_lower = qa.answer.lower().strip()
+                search_str = answer_lower[:80] if len(answer_lower) >= 80 else answer_lower
+                candidate_chunks = by_source.get(qa.source, corpus_chunks) if qa.source else corpus_chunks
+                relevant = [c.chunk_id for c in candidate_chunks if search_str in c.text.lower()]
+
             # Strategy 3: source match — for gold sets without context (e.g. HMGS)
             # All chunks from the matching law are considered relevant.
             if not relevant and qa.source:
