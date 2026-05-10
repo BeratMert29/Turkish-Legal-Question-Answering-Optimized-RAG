@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-05-09T19:18:08.701766+00:00",
+  "source_datasets": [
+    "C:\\Users\\USER\\OneDrive\\Desktop\\CENG493_Project\\CENG493_Project\\data\\processed\\qa_train.jsonl",
+    "ipproo/Turkish-law"
+  ],
+  "counts": {
+    "original_qa_train": 13354,
+    "ipproo_rows_fetched": 2325,
+    "ipproo_added": 1975,
+    "duplicates_removed": 350,
+    "final_merged": 15329
+  },
+  "output_file": "C:\\Users\\USER\\OneDrive\\Desktop\\CENG493_Project\\CENG493_Project\\data\\processed\\qa_train_merged.jsonl",
+  "dedup_method": "normalized_question_text"
+}

@@ -1,0 +1,6 @@
+FROM C:\Users\USER\OneDrive\Desktop\CENG493_Project\CENG493_Project\models\qwen25_merged.gguf
+PARAMETER temperature 0.0
+PARAMETER num_predict 512
+PARAMETER num_ctx 8192
+PARAMETER num_gpu 999
+SYSTEM "Sen Türk hukuku alanında uzman bir hukuki asistansın. Soruları yalnızca verilen bağlama dayanarak Türkçe yanıtla."
