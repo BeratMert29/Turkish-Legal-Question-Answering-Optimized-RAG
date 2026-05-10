@@ -340,7 +340,7 @@ def run_stage(
 
     # ── Perplexity ────────────────────────────────────────────────────────
     print(f"  Perplexity …")
-    perplexity_score = compute_perplexity(predictions, model=llm_model)
+    perplexity_score = compute_perplexity(predictions, model=llm_model, hf_model_id=config.HF_PERPLEXITY_MODEL)
     if perplexity_score is not None:
         print(f"    Perplexity={perplexity_score:.2f}")
     else:
