@@ -167,6 +167,10 @@ def write_modelfile() -> None:
         f"PARAMETER num_predict {config.LLM_MAX_TOKENS}\n"
         f"PARAMETER num_ctx 8192\n"
         f"PARAMETER num_gpu 999\n"
+        'PARAMETER stop "Soru:"\n'
+        'PARAMETER stop "\\nSoru"\n'
+        'PARAMETER stop "<|im_end|>"\n'
+        'PARAMETER stop "<|endoftext|>"\n'
         'SYSTEM "Sen Türk hukuku alanında uzman bir hukuki asistansın. '
         'Soruları yalnızca verilen bağlama dayanarak Türkçe yanıtla."\n'
     )
