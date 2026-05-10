@@ -56,7 +56,7 @@ TRAINING_CONFIG = {
         "learning_rate": 5e-5,
         "warmup_ratio": 0.03,
         "lr_scheduler_type": "cosine",
-        "max_length": 512,
+        "max_length": 1536,
         "dataset_text_field": "text",
         "logging_steps": 10,
         "save_strategy": "epoch",
@@ -86,7 +86,8 @@ def format_as_chat(example: dict, tokenizer) -> str:
     ctx = example.get("context_str", "") or example.get("context", "")
     context = ctx
     if context and context.strip():
-        user_content = f"Bağlam:\n{context.strip()}\n\nSoru: {question}"
+        ctx_truncated = context.strip()[:4000]
+        user_content = f"Bağlam:\n{ctx_truncated}\n\nSoru: {question}"
     else:
         user_content = question
     messages = [
