@@ -6,27 +6,28 @@ import config
 TURKISH_PROMPT = """Sen Türk hukuku alanında uzman bir hukuki asistansın. Görevin, yalnızca aşağıda numaralandırılmış [Kaynak N] bağlamlarını kullanarak soruyu eksiksiz ve doğru biçimde yanıtlamaktır.
 
 ZORUNLU KURALLAR:
-1. Yanıtını YALNIZCA verilen [Kaynak N] kaynaklarına dayandır. Kendi arka plan bilginden veya bağlamda yer almayan hiçbir bilgiden yararlanma.
-2. İlgili her atıfta kanun adını VE madde numarasını açıkça belirt (örnek: "Türk Medeni Kanunu Madde 997", "Türk Ceza Kanunu Madde 53").
-3. Birden fazla kaynak ilgiliyse hepsini sentezle ve [Kaynak N] numarasıyla göster.
-4. Kaynaklar arasında çelişki varsa çelişkiyi açıkça ifade et ve her iki görüşü kaynak numarasıyla aktar.
-5. Bağlam soruyu yanıtlamak için yetersizse "Sağlanan bağlam bu soruyu yanıtlamak için yeterli değildir." yaz; asla tahmin yürütme veya uydurma.
+1. Yanıtını YALNIZCA verilen [Kaynak N] kaynaklarına dayandır.
+2. Cevabını bağlamdaki AYNI kelime ve ifadelerle ver — parafraz yapma, kaynaklardaki orijinal hukuki terminolojiyi koru.
+3. İlgili her atıfta kanun adını VE madde numarasını açıkça belirt (örnek: "Türk Medeni Kanunu Madde 997").
+4. Birden fazla kaynak ilgiliyse hepsini sentezle ve [Kaynak N] numarasıyla göster.
+5. Bağlam soruyu yanıtlamak için yetersizse "Sağlanan bağlam bu soruyu yanıtlamak için yeterli değildir." yaz; asla tahmin yürütme.
 
 YANIT YAPISI:
-- İlk cümle: Sorunun doğrudan yanıtı.
+- İlk cümle: Sorunun doğrudan, kısa yanıtı (bağlamdaki tam ifadeyi kullan).
 - Devamı: Hukuki dayanak — ilgili kanun adı, madde numarası ve bağlamdan alınan açıklama.
-- Sonuç: Varsa pratik sonuç veya ek uyarı.
+- Gereksiz giriş cümlesi, tekrar veya açıklama ekleme.
 
 Yanıtını yalnızca Türkçe ver."""
 
-SHORT_ANSWER_PROMPT = """Sen Türk hukuku alanında uzman bir hukuki asistansın. Sana bir soru ve bağlam verilecektir.
+SHORT_ANSWER_PROMPT = """Sen Türk hukuku alanında uzman bir hukuki asistansın.
 
 ZORUNLU KURALLAR:
 1. Yanıtın yalnızca TEK bir ifade, sayı veya hukuki kavramdan oluşmalıdır — cümle kurma, açıklama yapma, gerekçe gösterme.
-2. Yanıtı öncelikle bağlamdan çıkar. Bağlamda tam ifade yoksa, bağlamdaki en ilgili hukuki terim veya kavramı yaz.
-3. Yalnızca bağlam soruyla tamamen ilgisizse şunu yaz: Bilgi yok
-4. Fazladan kelime, noktalama veya açıklama ekleme.
-5. Yanıtının hemen ardına, kullandığın kaynağın numarasını şu formatta ekle: [Kaynak 1] (ya da [Kaynak 2], vb.). Yalnızca tek bir kaynak numarası yaz.
+2. Bağlamdaki AYNI kelime veya ifadeyi kullan — parafraz yapma.
+3. Yanıtı öncelikle bağlamdan çıkar. Bağlamda tam ifade yoksa, en ilgili hukuki terimi yaz.
+4. Yalnızca bağlam tamamen ilgisizse şunu yaz: Bilgi yok
+5. Fazladan kelime, noktalama veya açıklama ekleme.
+6. Yanıtının hemen ardına, kullandığın kaynağın numarasını şu formatta ekle: [Kaynak 1]
 
 Yanıtını yalnızca Türkçe ver."""
 
@@ -174,6 +175,14 @@ class RAGPipeline:
         content = response.choices[0].message.content
         if not content:
             raise ValueError("LLM returned empty response")
+        # Find earliest occurrence of any stop marker (with or without leading newline/space)
+        cut = len(content)
+        for marker in ["Soru:", "Bağlam:", "Question:", "\nQ:"]:
+            idx = content.find(marker)
+            # Skip if marker appears at the very start (first 10 chars) — avoid cutting legitimate openings
+            if idx != -1 and idx >= 10:
+                cut = min(cut, idx)
+        content = content[:cut]
         return content.strip()
 
     def run(self, question: str, top_k_retrieval: int = config.TOP_K_RETRIEVAL) -> dict:

@@ -57,6 +57,8 @@ from evaluation.llm_judge import (
 )
 from evaluation.semantic_similarity import compute_semantic_similarity
 from evaluation.final_score import compute_all_scenario_scores
+from evaluation.perplexity import compute_perplexity
+from evaluation.ragas_metrics import compute_ragas_metrics
 from generation.rag_pipeline import RAGPipeline, TURKISH_PROMPT, SHORT_ANSWER_PROMPT
 from retrieval.bm25_retriever import BM25Index
 from retrieval.embedder import Embedder
@@ -88,6 +90,7 @@ STAGE_REGISTRY: dict[str, StageConfig] = {
         retrieval="dense",
         use_rerank=False,
         llm="base",
+        inject_citations=True,
         results_dir=config.RESULTS_DIR_BASE,
     ),
     "hybrid": StageConfig(
@@ -96,6 +99,7 @@ STAGE_REGISTRY: dict[str, StageConfig] = {
         retrieval="hybrid",
         use_rerank=False,
         llm="base",
+        inject_citations=True,
         results_dir=config.RESULTS_DIR_BASE / "hybrid",
     ),
     "rrf": StageConfig(
@@ -104,6 +108,7 @@ STAGE_REGISTRY: dict[str, StageConfig] = {
         retrieval="rrf",
         use_rerank=False,
         llm="base",
+        inject_citations=True,
         results_dir=config.RESULTS_DIR_BASE / "rrf",
     ),
     "rrf_rerank": StageConfig(
@@ -112,6 +117,7 @@ STAGE_REGISTRY: dict[str, StageConfig] = {
         retrieval="rrf",
         use_rerank=True,
         llm="base",
+        inject_citations=True,
         results_dir=config.RESULTS_DIR_RERANK,
     ),
     "llm_ft": StageConfig(
@@ -129,6 +135,7 @@ STAGE_REGISTRY: dict[str, StageConfig] = {
         retrieval="rrf",
         use_rerank=True,
         llm="base",
+        inject_citations=True,
         results_dir=config.RESULTS_DIR_EMB_FT,
         requires_emb_ft=True,
     ),
@@ -285,9 +292,14 @@ def run_stage(
 
     # ── Generation ─────────────────────────────────────────────────────────
     print(f"  Generation with {llm_model} …")
+    max_tokens = (
+        config.LLM_FINETUNED_MAX_TOKENS if stage.llm == "finetuned"
+        else config.LLM_MAX_TOKENS
+    )
     pipeline = RAGPipeline(
         retriever,
         model=llm_model,
+        max_tokens=max_tokens,
         short_answer_mode=short_answer_mode,
     )
 
@@ -302,6 +314,7 @@ def run_stage(
                 answer = inject_citations(answer, ctx_chunks)
             predictions.append({
                 "query_id": qa.query_id,
+                "question": qa.question,
                 "predicted": answer,
                 "expected": qa.answer,
                 "retrieved_sources": [c["source"] for c in ctx_chunks],
@@ -312,6 +325,7 @@ def run_stage(
             print(f"\n    ERROR on {qa.query_id}: {exc}")
             predictions.append({
                 "query_id": qa.query_id,
+                "question": qa.question,
                 "predicted": "",
                 "expected": qa.answer,
                 "retrieved_sources": [],
@@ -323,6 +337,25 @@ def run_stage(
     print(f"    F1={qa_metrics.get('f1',0):.4f}  "
           f"ROUGE-L={qa_metrics.get('rouge_l',0):.4f}  "
           f"Citation={qa_metrics.get('citation_accuracy',0):.4f}")
+
+    # ── Perplexity ────────────────────────────────────────────────────────
+    print(f"  Perplexity …")
+    perplexity_score = compute_perplexity(predictions, model=llm_model, hf_model_id=config.HF_PERPLEXITY_MODEL)
+    if perplexity_score is not None:
+        print(f"    Perplexity={perplexity_score:.2f}")
+    else:
+        print(f"    Perplexity=N/A (logprobs not supported)")
+
+    # ── RAGAS ─────────────────────────────────────────────────────────────
+    print(f"  RAGAS metrics …")
+    ragas_scores = compute_ragas_metrics(predictions, llm_model=llm_model)
+    if ragas_scores:
+        print(f"    RAGAS faithfulness={ragas_scores.get('ragas_faithfulness','N/A')}  "
+              f"relevancy={ragas_scores.get('ragas_answer_relevancy','N/A')}  "
+              f"ctx_precision={ragas_scores.get('ragas_context_precision','N/A')}  "
+              f"ctx_recall={ragas_scores.get('ragas_context_recall','N/A')}")
+    else:
+        print(f"    RAGAS=N/A (install: pip install ragas langchain-ollama)")
 
     # ── Hallucination ──────────────────────────────────────────────────────
     print(f"  Hallucination analysis …")
@@ -433,6 +466,8 @@ def run_stage(
         "scenario1_score": scenario_scores["scenario1"],
         "scenario2_score": scenario_scores["scenario2"],
         "scenario3_score": scenario_scores["scenario3"],
+        "perplexity": perplexity_score,
+        "ragas_scores": ragas_scores or {},
     }
 
     out_path = stage.results_dir / "baseline_metrics.json"
@@ -518,6 +553,12 @@ def main() -> None:
         "--list-stages", action="store_true",
         help="Print available stages and exit.",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Limit QA examples per stage for quick testing (e.g. --limit 30).",
+    )
     args = parser.parse_args()
 
     if args.list_stages:
@@ -579,6 +620,9 @@ def main() -> None:
         qa_examples = DataProcessor.build_gold_eval_set()
     else:
         qa_examples = processor.build_qa_eval_set()
+    if args.limit:
+        qa_examples = qa_examples[:args.limit]
+        print(f"  [--limit {args.limit}] Evaluating first {args.limit} examples only.")
 
     print(f"  Corpus: {len(corpus_chunks)} chunks  |  QA: {len(qa_examples)} examples")
 

@@ -1,0 +1,8 @@
+# RTX 50-series / Blackwell GPUs need a PyTorch build with sm_120 support.
+# Install this file before requirements.txt on NVIDIA CUDA systems:
+#   python -m pip install -r requirements-cu128.txt
+--index-url https://download.pytorch.org/whl/cu128
+
+torch
+torchvision
+torchaudio

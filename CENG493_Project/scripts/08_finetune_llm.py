@@ -18,10 +18,16 @@ import config
 HF_MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
 ADAPTER_DIR = config.BASE_DIR / "models" / "qwen25_lora"
 
+RAG_DATASET    = config.PROCESSED_DIR / "qa_train_rag.jsonl"
 MERGED_DATASET = config.PROCESSED_DIR / "qa_train_merged.jsonl"
 FALLBACK_DATASET = config.PROCESSED_DIR / "qa_train.jsonl"
 
-SYSTEM_PROMPT = "Sen bir Türk hukuku konusunda uzman hukuki asistansın. Soruyu Türkçe yanıtla."
+SYSTEM_PROMPT = (
+    "Sen Türk hukuku alanında uzman bir hukuki asistansın. "
+    "Yanıtını yalnızca verilen bağlama dayandır. "
+    "Kısa, doğrudan ve kaynaklı cevap ver. "
+    "Yeni soru üretme, bağlamı tekrar yazma."
+)
 
 TRAINING_CONFIG = {
     "base_model": HF_MODEL_ID,
@@ -43,14 +49,14 @@ TRAINING_CONFIG = {
         "bnb_4bit_compute_dtype": "bfloat16",
     },
     "training": {
-        "num_train_epochs": 3,
+        "num_train_epochs": 1,
         "per_device_train_batch_size": 1,
         "gradient_accumulation_steps": 8,
         "effective_batch_size": 8,
-        "learning_rate": 2e-4,
+        "learning_rate": 5e-5,
         "warmup_ratio": 0.03,
         "lr_scheduler_type": "cosine",
-        "max_length": 1024,
+        "max_length": 1536,
         "dataset_text_field": "text",
         "logging_steps": 10,
         "save_strategy": "epoch",
@@ -80,7 +86,8 @@ def format_as_chat(example: dict, tokenizer) -> str:
     ctx = example.get("context_str", "") or example.get("context", "")
     context = ctx
     if context and context.strip():
-        user_content = f"Baglam:\n{context.strip()}\n\nSoru: {question}"
+        ctx_truncated = context.strip()[:4000]
+        user_content = f"Bağlam:\n{ctx_truncated}\n\nSoru: {question}"
     else:
         user_content = question
     messages = [
@@ -146,7 +153,7 @@ def main() -> None:
     )
     from trl import SFTConfig, SFTTrainer
 
-    dataset_path = MERGED_DATASET if MERGED_DATASET.exists() else FALLBACK_DATASET
+    dataset_path = RAG_DATASET if RAG_DATASET.exists() else (MERGED_DATASET if MERGED_DATASET.exists() else FALLBACK_DATASET)
     if not dataset_path.exists():
         print(f"ERROR: dataset not found at {dataset_path}")
         sys.exit(1)

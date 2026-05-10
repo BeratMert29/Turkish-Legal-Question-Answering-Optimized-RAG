@@ -16,7 +16,7 @@ from retrieval.retriever import Retriever
 ADAPTER_DIR = config.BASE_DIR / "models" / "bge_reranker_ft"
 HARD_NEG_PER_QUERY = 3
 TRAIN_EPOCHS = 3
-BATCH_SIZE = 16
+BATCH_SIZE = 4
 RANDOM_SEED = 42
 
 
@@ -173,13 +173,15 @@ def main() -> None:
     print(f"\n  Train pairs  : {len(train_pairs)}")
     print(f"  Eval pairs   : {len(eval_pairs)}")
 
+    import torch
     from sentence_transformers import CrossEncoder, InputExample
     from torch.utils.data import DataLoader
 
     train_examples = [InputExample(texts=[q, p], label=l) for q, p, l in train_pairs]
 
-    print(f"\nLoading CrossEncoder {config.RERANKER_MODEL} ...")
-    model = CrossEncoder(config.RERANKER_MODEL, num_labels=1)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"\nLoading CrossEncoder {config.RERANKER_MODEL} on {device} ...")
+    model = CrossEncoder(config.RERANKER_MODEL, num_labels=1, device=device)
 
     train_dataloader = DataLoader(train_examples, shuffle=True, batch_size=BATCH_SIZE)
 

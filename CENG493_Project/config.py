@@ -49,6 +49,7 @@ HMGS_EVAL_EXPECTED = 161  # 240 raw - 49 no corpus - 5 VUK (misattributed) - 25 
 # Embedding
 EMBEDDING_MODEL = "BAAI/bge-m3"
 FINETUNED_EMBEDDING_MODEL = str(BASE_DIR / "models" / "bge-m3-turkish-legal")
+HF_PERPLEXITY_MODEL = "Qwen/Qwen2.5-7B-Instruct"
 EMBEDDING_DIM = 1024
 EMBEDDING_BATCH_SIZE = 32
 
@@ -63,12 +64,13 @@ RERANKER_CANDIDATES = 10   # initial dense/RRF pool before cross-encoder re-rank
 RRF_K = 60                 # RRF smoothing constant
 
 # LLM (Ollama — free, no API key)
-LLM_MODEL = "qwen2.5:7b"
+LLM_MODEL = "qwen2.5:14b"
 LLM_FINETUNED_MODEL = "qwen25-legal-ft"   # created by scripts/13_export_lora_to_ollama.py
 LLM_BASE_URL = "http://localhost:11434/v1"
 LLM_API_KEY = "ollama"
 LLM_TEMPERATURE = 0.0
 LLM_MAX_TOKENS = 512
+LLM_FINETUNED_MAX_TOKENS = 256  # shorter cap for fine-tuned model to reduce runaway generation
 
 # Evaluation
 HALLUCINATION_SAMPLE_SIZE = 150

@@ -39,7 +39,7 @@ GGUF_PATH      = config.BASE_DIR / "models" / "qwen25_merged.gguf"
 MODELFILE_PATH = config.BASE_DIR / "models" / "Modelfile"
 OLLAMA_NAME    = config.LLM_FINETUNED_MODEL   # "qwen25-legal-ft"
 LLAMA_CPP_DIR  = config.BASE_DIR / "tools" / "llama.cpp"
-QUANT_TYPE     = "q4_k_m"
+QUANT_TYPE     = "q8_0"
 
 
 def _step(n: int, title: str) -> None:
@@ -166,6 +166,11 @@ def write_modelfile() -> None:
         f"PARAMETER temperature {config.LLM_TEMPERATURE}\n"
         f"PARAMETER num_predict {config.LLM_MAX_TOKENS}\n"
         f"PARAMETER num_ctx 8192\n"
+        f"PARAMETER num_gpu 999\n"
+        'PARAMETER stop "Soru:"\n'
+        'PARAMETER stop "\\nSoru"\n'
+        'PARAMETER stop "<|im_end|>"\n'
+        'PARAMETER stop "<|endoftext|>"\n'
         'SYSTEM "Sen Türk hukuku alanında uzman bir hukuki asistansın. '
         'Soruları yalnızca verilen bağlama dayanarak Türkçe yanıtla."\n'
     )
