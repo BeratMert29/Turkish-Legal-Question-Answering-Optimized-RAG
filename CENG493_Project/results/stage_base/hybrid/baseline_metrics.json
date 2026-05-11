@@ -26,9 +26,9 @@
   },
   "qa_metrics": {
     "em": 0.037267080745341616,
-    "f1": 0.13072479044121932,
-    "rouge_l": 0.17402705155751372,
-    "bleu": 0.025159714025075042,
+    "f1": 0.1312966146051985,
+    "rouge_l": 0.17633350108126047,
+    "bleu": 0.025780277674393604,
     "citation_accuracy": 0.8633540372670807,
     "source_in_context_rate": 0.8819875776397516,
     "citation_presence_rate": 1.0,
@@ -36,8 +36,8 @@
   },
   "hallucination_summary": {
     "total": 150,
-    "faithful_count": 146,
-    "faithful_rate": 0.9733333333333334,
+    "faithful_count": 147,
+    "faithful_rate": 0.98,
     "by_category": {
       "hits": {
         "total": 50,
@@ -49,25 +49,25 @@
       },
       "misses": {
         "total": 50,
-        "faithful": 47
+        "faithful": 48
       }
     },
     "score_stats": {
-      "mean": 0.8660506556322798,
+      "mean": 0.8661368874600157,
       "min": 0.001731811324134469,
       "max": 0.9796226620674133,
-      "std": 0.12022366831760711
+      "std": 0.12083199876457551
     }
   },
-  "faithfulness_rate": 0.9733333333333334,
-  "llm_judge_score": 0.25,
-  "llm_faithfulness_score": 0.9,
+  "faithfulness_rate": 0.98,
+  "llm_judge_score": 0.265,
+  "llm_faithfulness_score": 0.9025000000000001,
   "llm_relevancy_score": 0.67,
-  "llm_coherence_score": 0.2875,
-  "semantic_similarity": 0.47877422005215786,
-  "scenario1_score": 0.559868,
-  "scenario2_score": 0.23514,
-  "scenario3_score": 0.619167,
-  "perplexity": 8.0293,
+  "llm_coherence_score": 0.31,
+  "semantic_similarity": 0.47093584131657706,
+  "scenario1_score": 0.560721,
+  "scenario2_score": 0.233188,
+  "scenario3_score": 0.6275,
+  "perplexity": 8.0255,
   "ragas_scores": {}
 }
