@@ -340,11 +340,20 @@ def run_stage(
 
     # ── Perplexity ────────────────────────────────────────────────────────
     print(f"  Perplexity …")
-    perplexity_score = compute_perplexity(predictions, model=llm_model, hf_model_id=config.HF_PERPLEXITY_MODEL)
-    if perplexity_score is not None:
-        print(f"    Perplexity={perplexity_score:.2f}")
+    try:
+        perplexity_score = compute_perplexity(
+            predictions,
+            model=llm_model,
+            hf_model_id=config.HF_PERPLEXITY_MODEL,
+        )
+    except Exception as exc:
+        perplexity_score = None
+        print(f"    Perplexity=N/A ({exc.__class__.__name__}: {exc})")
     else:
-        print(f"    Perplexity=N/A (logprobs not supported)")
+        if perplexity_score is not None:
+            print(f"    Perplexity={perplexity_score:.2f}")
+        else:
+            print(f"    Perplexity=N/A (logprobs not supported)")
 
     # ── RAGAS ─────────────────────────────────────────────────────────────
     print(f"  RAGAS metrics …")
