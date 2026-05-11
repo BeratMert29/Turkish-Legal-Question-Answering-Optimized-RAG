@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -32,7 +33,6 @@ if str(_PROJECT_ROOT) not in sys.path:
 import config
 
 # ── Paths ──────────────────────────────────────────────────────────────────
-HF_BASE_MODEL  = "Qwen/Qwen2.5-7B-Instruct"
 ADAPTER_DIR    = config.BASE_DIR / "models" / "qwen25_lora"
 MERGED_DIR     = config.BASE_DIR / "models" / "qwen25_merged"
 GGUF_PATH      = config.BASE_DIR / "models" / "qwen25_merged.gguf"
@@ -40,6 +40,27 @@ MODELFILE_PATH = config.BASE_DIR / "models" / "Modelfile"
 OLLAMA_NAME    = config.LLM_FINETUNED_MODEL   # "qwen25-legal-ft"
 LLAMA_CPP_DIR  = config.BASE_DIR / "tools" / "llama.cpp"
 QUANT_TYPE     = "q8_0"
+
+
+def _base_model_id() -> str:
+    training_config_path = ADAPTER_DIR / "training_config.json"
+    if training_config_path.exists():
+        with open(training_config_path, encoding="utf-8") as f:
+            training_config = json.load(f)
+        return training_config.get("base_model", "Qwen/Qwen2.5-7B-Instruct")
+    return "Qwen/Qwen2.5-7B-Instruct"
+
+
+def _ollama_cmd() -> str:
+    cmd = shutil.which("ollama")
+    if cmd:
+        return cmd
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        candidate = Path(local_app_data) / "Programs" / "Ollama" / "ollama.exe"
+        if candidate.exists():
+            return str(candidate)
+    sys.exit("ERROR: ollama not found. Install/start Ollama or add it to PATH.")
 
 
 def _step(n: int, title: str) -> None:
@@ -51,7 +72,8 @@ def _step(n: int, title: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 def merge_adapter(dry_run: bool) -> None:
     _step(1, "LoRA adaptörünü base model ile birleştir")
-    print(f"  Base    : {HF_BASE_MODEL}")
+    hf_base_model = _base_model_id()
+    print(f"  Base    : {hf_base_model}")
     print(f"  Adapter : {ADAPTER_DIR}")
     print(f"  Output  : {MERGED_DIR}")
 
@@ -68,12 +90,12 @@ def merge_adapter(dry_run: bool) -> None:
 
     print("\n  Loading base model (bf16, device_map=auto) …")
     base = AutoModelForCausalLM.from_pretrained(
-        HF_BASE_MODEL,
+        hf_base_model,
         torch_dtype=torch.bfloat16,
         device_map="auto",
         trust_remote_code=True,
     )
-    tok = AutoTokenizer.from_pretrained(HF_BASE_MODEL, trust_remote_code=True)
+    tok = AutoTokenizer.from_pretrained(hf_base_model, trust_remote_code=True)
 
     print("  Loading LoRA adapter …")
     model = PeftModel.from_pretrained(base, str(ADAPTER_DIR))
@@ -185,11 +207,10 @@ def write_modelfile() -> None:
 def register_with_ollama(dry_run: bool) -> None:
     _step(4, f"Ollama'ya kaydet → {OLLAMA_NAME}")
 
-    if not shutil.which("ollama"):
-        sys.exit("ERROR: ollama not found in PATH. Start Ollama: https://ollama.com")
+    ollama_cmd = _ollama_cmd()
 
     if dry_run:
-        print(f"  [dry-run] Would run: ollama create {OLLAMA_NAME} -f {MODELFILE_PATH}")
+        print(f"  [dry-run] Would run: {ollama_cmd} create {OLLAMA_NAME} -f {MODELFILE_PATH}")
         return
 
     if not GGUF_PATH.exists():
@@ -199,7 +220,7 @@ def register_with_ollama(dry_run: bool) -> None:
         write_modelfile()
 
     subprocess.run(
-        ["ollama", "create", OLLAMA_NAME, "-f", str(MODELFILE_PATH)],
+        [ollama_cmd, "create", OLLAMA_NAME, "-f", str(MODELFILE_PATH)],
         check=True,
     )
     print(f"\n  ✓ Model registered: {OLLAMA_NAME}")

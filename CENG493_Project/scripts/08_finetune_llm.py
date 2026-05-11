@@ -8,6 +8,8 @@ from pathlib import Path
 # TRL reads Jinja templates without explicit encoding; on Windows with Turkish locale
 # (cp1254) this crashes. Force UTF-8 before any trl import.
 os.environ.setdefault("PYTHONUTF8", "1")
+# Avoid torch.compile/dynamo hooks around checkpointed/quantized modules on Windows.
+os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
 
 _project_root = str(Path(__file__).parent.parent)
 if _project_root not in sys.path:
@@ -15,7 +17,8 @@ if _project_root not in sys.path:
 
 import config
 
-HF_MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
+HF_MODEL_ID = "Qwen/Qwen2.5-3B-Instruct"
+QLORA_MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
 ADAPTER_DIR = config.BASE_DIR / "models" / "qwen25_lora"
 
 RAG_DATASET    = config.PROCESSED_DIR / "qa_train_rag.jsonl"
@@ -31,9 +34,10 @@ SYSTEM_PROMPT = (
 
 TRAINING_CONFIG = {
     "base_model": HF_MODEL_ID,
+    "backend": "safe_lora_fp16",
     "lora": {
-        "r": 16,
-        "lora_alpha": 32,
+        "r": 8,
+        "lora_alpha": 16,
         "lora_dropout": 0.05,
         "target_modules": [
             "q_proj", "k_proj", "v_proj", "o_proj",
@@ -45,26 +49,26 @@ TRAINING_CONFIG = {
     "qlora": {
         "load_in_4bit": True,
         "bnb_4bit_quant_type": "nf4",
-        "bnb_4bit_use_double_quant": True,
-        "bnb_4bit_compute_dtype": "bfloat16",
+        "bnb_4bit_use_double_quant": False,
+        "bnb_4bit_compute_dtype": "float16",
     },
     "training": {
         "num_train_epochs": 1,
         "per_device_train_batch_size": 1,
-        "gradient_accumulation_steps": 8,
-        "effective_batch_size": 8,
+        "gradient_accumulation_steps": 4,
+        "effective_batch_size": 4,
         "learning_rate": 5e-5,
         "warmup_ratio": 0.03,
         "lr_scheduler_type": "cosine",
-        "max_length": 1536,
+        "max_length": 512,
         "dataset_text_field": "text",
         "logging_steps": 10,
-        "save_strategy": "epoch",
+        "save_strategy": "no",
         "fp16": False,
-        "bf16": True,
-        "optim": "paged_adamw_8bit",
+        "bf16": False,
+        "optim": "adamw_torch",
         "report_to": "none",
-        "gradient_checkpointing": True,
+        "gradient_checkpointing": False,
         "dataloader_num_workers": 0,
     },
     "adapter_output_dir": str(ADAPTER_DIR),
@@ -130,12 +134,37 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=f"Resume training from the latest checkpoint in {ADAPTER_DIR}.",
     )
+    p.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Stop after this many optimizer steps. Useful for smoke tests.",
+    )
+    p.add_argument(
+        "--sample-size",
+        type=int,
+        default=None,
+        help="Use only the first N examples. Useful for smoke tests.",
+    )
+    p.add_argument(
+        "--backend",
+        choices=["safe", "qlora"],
+        default="safe",
+        help="safe: Qwen2.5-3B fp16 LoRA; qlora: Qwen2.5-7B 4-bit QLoRA.",
+    )
     return p
 
 
 def find_last_checkpoint(adapter_dir: Path):
     """Return path to the latest checkpoint subdir, or None."""
-    checkpoints = sorted(adapter_dir.glob("checkpoint-*"), key=lambda p: int(p.name.split("-")[-1]))
+    checkpoints = []
+    for path in adapter_dir.glob("checkpoint-*"):
+        if not path.is_dir():
+            continue
+        step = path.name.split("-")[-1]
+        if step.isdigit():
+            checkpoints.append(path)
+    checkpoints = sorted(checkpoints, key=lambda p: int(p.name.split("-")[-1]))
     return str(checkpoints[-1]) if checkpoints else None
 
 
@@ -159,13 +188,19 @@ def main() -> None:
         sys.exit(1)
     print(f"Loading dataset from {dataset_path} ...")
     raw_records = load_jsonl(dataset_path)
+    if args.sample_size is not None:
+        raw_records = raw_records[:args.sample_size]
     print(f"  {len(raw_records)} examples loaded.")
 
     print("\nGPU memory at startup:")
     print_gpu_memory()
 
-    print(f"\nLoading tokenizer from {HF_MODEL_ID} ...")
-    tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_ID, trust_remote_code=True)
+    model_id = QLORA_MODEL_ID if args.backend == "qlora" else HF_MODEL_ID
+    TRAINING_CONFIG["base_model"] = model_id
+    TRAINING_CONFIG["backend"] = "qlora_4bit" if args.backend == "qlora" else "safe_lora_fp16"
+
+    print(f"\nLoading tokenizer from {model_id} ...")
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     # Qwen2.5 has no pad token by default; reuse eos so padding doesn't break training
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -181,15 +216,17 @@ def main() -> None:
         bnb_cfg = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=False,
+            bnb_4bit_compute_dtype=torch.float16,
         )
-        model = AutoModelForCausalLM.from_pretrained(
-            HF_MODEL_ID,
-            quantization_config=bnb_cfg,
-            device_map="auto",
-            trust_remote_code=True,
-        )
+        load_kwargs = {
+            "torch_dtype": torch.float16,
+            "device_map": "auto",
+            "trust_remote_code": True,
+        }
+        if args.backend == "qlora":
+            load_kwargs["quantization_config"] = bnb_cfg
+        model = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs)
         print(f"  Model loaded: {model.__class__.__name__}")
         print("\n[dry-run] Done. Exiting without training.")
         return
@@ -197,26 +234,39 @@ def main() -> None:
     print("\nPreparing formatted dataset ...")
     formatted_texts = [format_as_chat(r, tokenizer) for r in raw_records]
     hf_dataset = Dataset.from_dict({"text": formatted_texts})
-    split = hf_dataset.train_test_split(test_size=0.1, seed=42)
-    hf_dataset = split["train"]
-    eval_dataset = split["test"]
-    print(f"  Train: {len(hf_dataset)}, Val: {len(eval_dataset)}")
+    print(f"  Train: {len(hf_dataset)}")
 
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=TRAINING_CONFIG["qlora"]["load_in_4bit"],
         bnb_4bit_quant_type=TRAINING_CONFIG["qlora"]["bnb_4bit_quant_type"],
         bnb_4bit_use_double_quant=TRAINING_CONFIG["qlora"]["bnb_4bit_use_double_quant"],
-        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_compute_dtype=torch.float16,
     )
 
-    print(f"\nLoading base model {HF_MODEL_ID} in 4-bit ...")
-    model = AutoModelForCausalLM.from_pretrained(
-        HF_MODEL_ID,
-        quantization_config=bnb_config,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    model = prepare_model_for_kbit_training(model)
+    if args.backend == "qlora":
+        print(f"\nLoading base model {model_id} in 4-bit QLoRA mode ...")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            quantization_config=bnb_config,
+            torch_dtype=torch.float16,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+    else:
+        print(f"\nLoading base model {model_id} in safe fp16 LoRA mode ...")
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            torch_dtype=torch.float16,
+            trust_remote_code=True,
+        )
+        if torch.cuda.is_available():
+            model = model.to("cuda")
+    model.config.use_cache = False
+    if args.backend == "qlora":
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=TRAINING_CONFIG["training"]["gradient_checkpointing"],
+        )
 
     lc = TRAINING_CONFIG["lora"]
     lora_config = LoraConfig(
@@ -254,15 +304,20 @@ def main() -> None:
         lr_scheduler_type=tc["lr_scheduler_type"],
         logging_steps=tc["logging_steps"],
         save_strategy=tc["save_strategy"],
-        eval_strategy="steps",
-        eval_steps=50,
+        # Full evaluation is run separately by scripts/14_eval_all_stages.py.
+        # Keeping step eval disabled avoids Windows/CUDA stalls during QLoRA.
+        eval_strategy="no",
+        do_eval=False,
         fp16=tc["fp16"],
         bf16=tc["bf16"],
         optim=tc["optim"],
         report_to=tc["report_to"],
         remove_unused_columns=True,
+        max_steps=args.max_steps if args.max_steps is not None else -1,
+        max_grad_norm=0.0,
         gradient_checkpointing=tc["gradient_checkpointing"],
         dataloader_num_workers=tc["dataloader_num_workers"],
+        dataloader_pin_memory=False,
         # SFT-specific fields live here in TRL 1.x
         dataset_text_field=tc["dataset_text_field"],
         max_length=tc["max_length"],
@@ -272,7 +327,7 @@ def main() -> None:
         model=model,
         args=training_args,
         train_dataset=hf_dataset,
-        eval_dataset=eval_dataset,
+        eval_dataset=None,
         processing_class=tokenizer,
     )
 
