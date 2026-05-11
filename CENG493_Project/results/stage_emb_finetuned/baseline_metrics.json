@@ -4,68 +4,70 @@
     "stage_name": "Stage 2 — Fine-tuned Embedding",
     "embedding_model": "C:\\Users\\USER\\OneDrive\\Desktop\\CENG493_Project\\CENG493_Project\\models\\bge-m3-turkish-legal",
     "retrieval_mode": "rrf_rerank",
-    "llm_model": "qwen2.5:7b",
-    "inject_citations": false,
+    "llm_model": "qwen2.5:14b",
+    "inject_citations": true,
     "chunk_size": 1400,
     "chunk_overlap": 180,
     "top_k_retrieval": 10,
     "top_k_for_generation": 5
   },
   "retrieval_metrics": {
-    "recall_at_5": 0.427597234502407,
-    "recall_at_10": 0.48570119535636774,
-    "mrr": 0.8703095238095239,
-    "ndcg_at_10": 0.546810473233859,
-    "source_hit_at_5": 0.9366666666666666,
-    "source_hit_at_10": 0.9433333333333334,
-    "capped_recall_at_5": 0.5172222222222227,
-    "capped_recall_at_10": 0.4992671957671954,
-    "precision_at_5": 0.3806666666666679,
-    "precision_at_10": 0.23066666666666705,
-    "num_queries": 300
+    "recall_at_5": 0.015249008436144101,
+    "recall_at_10": 0.025061546050263207,
+    "mrr": 0.8828847481021395,
+    "ndcg_at_10": 0.6729981389753809,
+    "source_hit_at_5": 0.9440993788819876,
+    "source_hit_at_10": 0.9565217391304348,
+    "capped_recall_at_5": 0.7403726708074527,
+    "capped_recall_at_10": 0.6186335403726708,
+    "precision_at_5": 0.7403726708074527,
+    "precision_at_10": 0.6186335403726708,
+    "num_queries": 161
   },
   "qa_metrics": {
-    "em": 0.0,
-    "f1": 0.2654871326590685,
-    "rouge_l": 0.2811542423326486,
-    "bleu": 0.11488427421618422,
-    "citation_accuracy": 0.5266666666666666,
-    "source_in_context_rate": 0.9866666666666667,
-    "citation_presence_rate": 0.5466666666666666,
-    "num_samples": 300
+    "em": 0.049689440993788817,
+    "f1": 0.16107894204877415,
+    "rouge_l": 0.2106189267191812,
+    "bleu": 0.02898399123990128,
+    "citation_accuracy": 0.937888198757764,
+    "source_in_context_rate": 0.9503105590062112,
+    "citation_presence_rate": 1.0,
+    "num_samples": 161
   },
   "hallucination_summary": {
     "total": 150,
-    "faithful_count": 150,
-    "faithful_rate": 1.0,
+    "faithful_count": 145,
+    "faithful_rate": 0.9666666666666667,
     "by_category": {
       "hits": {
         "total": 50,
-        "faithful": 50
+        "faithful": 49
       },
       "partial": {
         "total": 50,
-        "faithful": 50
+        "faithful": 49
       },
       "misses": {
         "total": 50,
-        "faithful": 50
+        "faithful": 47
       }
     },
     "score_stats": {
-      "mean": 0.9222151494026184,
-      "min": 0.6198908686637878,
-      "max": 0.9863718152046204,
-      "std": 0.05501746859640799
+      "mean": 0.8672154131073815,
+      "min": 0.0014630263904109597,
+      "max": 0.981894314289093,
+      "std": 0.14633144545641052
     }
   },
-  "faithfulness_rate": 1.0,
-  "llm_judge_score": 0.8625,
-  "llm_faithfulness_score": 0.625,
-  "llm_relevancy_score": 0.9574999999999999,
-  "llm_coherence_score": 0.9199999999999999,
-  "semantic_similarity": 0.7432561086366574,
-  "scenario1_score": 0.567053,
-  "scenario2_score": 0.408818,
-  "scenario3_score": 0.834167
+  "faithfulness_rate": 0.9666666666666667,
+  "llm_judge_score": 0.24,
+  "llm_faithfulness_score": 0.96,
+  "llm_relevancy_score": 0.645,
+  "llm_coherence_score": 0.24,
+  "semantic_similarity": 0.4845409869499829,
+  "scenario1_score": 0.613441,
+  "scenario2_score": 0.258118,
+  "scenario3_score": 0.615,
+  "perplexity": 9.3078,
+  "ragas_scores": {}
 }
