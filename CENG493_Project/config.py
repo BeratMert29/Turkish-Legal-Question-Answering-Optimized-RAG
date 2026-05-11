@@ -49,7 +49,7 @@ HMGS_EVAL_EXPECTED = 161  # 240 raw - 49 no corpus - 5 VUK (misattributed) - 25 
 # Embedding
 EMBEDDING_MODEL = "BAAI/bge-m3"
 FINETUNED_EMBEDDING_MODEL = str(BASE_DIR / "models" / "bge-m3-turkish-legal")
-HF_PERPLEXITY_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+HF_PERPLEXITY_MODEL = "Qwen/Qwen2.5-3B-Instruct"
 EMBEDDING_DIM = 1024
 EMBEDDING_BATCH_SIZE = 32
 
