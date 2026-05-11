@@ -1,0 +1,294 @@
+{
+  "base": {
+    "hyperparameters": {
+      "stage": "base",
+      "stage_name": "Stage 1 — Base RAG",
+      "embedding_model": "BAAI/bge-m3",
+      "retrieval_mode": "dense",
+      "llm_model": "qwen2.5:14b",
+      "inject_citations": true,
+      "chunk_size": 1400,
+      "chunk_overlap": 180,
+      "top_k_retrieval": 10,
+      "top_k_for_generation": 5
+    },
+    "retrieval_metrics": {
+      "recall_at_5": 0.01355480481154056,
+      "recall_at_10": 0.024507816342829388,
+      "mrr": 0.843293404318249,
+      "ndcg_at_10": 0.634900673496398,
+      "source_hit_at_5": 0.9192546583850931,
+      "source_hit_at_10": 0.9813664596273292,
+      "capped_recall_at_5": 0.6633540372670803,
+      "capped_recall_at_10": 0.6006211180124222,
+      "precision_at_5": 0.6633540372670803,
+      "precision_at_10": 0.6006211180124222,
+      "num_queries": 161
+    },
+    "qa_metrics": {
+      "em": 0.043478260869565216,
+      "f1": 0.14018004859523472,
+      "rouge_l": 0.18426793923922552,
+      "bleu": 0.03809458587719361,
+      "citation_accuracy": 0.9130434782608695,
+      "source_in_context_rate": 0.9254658385093167,
+      "citation_presence_rate": 1.0,
+      "num_samples": 161
+    },
+    "hallucination_summary": {
+      "total": 150,
+      "faithful_count": 147,
+      "faithful_rate": 0.98,
+      "by_category": {
+        "hits": {
+          "total": 50,
+          "faithful": 49
+        },
+        "partial": {
+          "total": 50,
+          "faithful": 49
+        },
+        "misses": {
+          "total": 50,
+          "faithful": 49
+        }
+      },
+      "score_stats": {
+        "mean": 0.8735917065579755,
+        "min": 0.0014630263904109597,
+        "max": 0.9760569334030151,
+        "std": 0.11053283631652633
+      }
+    },
+    "faithfulness_rate": 0.98,
+    "llm_judge_score": 0.28250000000000003,
+    "llm_faithfulness_score": 1.0,
+    "llm_relevancy_score": 0.6599999999999999,
+    "llm_coherence_score": 0.21000000000000002,
+    "semantic_similarity": 0.46573005725415595,
+    "scenario1_score": 0.601225,
+    "scenario2_score": 0.237845,
+    "scenario3_score": 0.623333,
+    "perplexity": 8.0262,
+    "ragas_scores": {}
+  },
+  "hybrid": {
+    "hyperparameters": {
+      "stage": "hybrid",
+      "stage_name": "Stage 1b — Hybrid BM25+Dense",
+      "embedding_model": "BAAI/bge-m3",
+      "retrieval_mode": "hybrid",
+      "llm_model": "qwen2.5:14b",
+      "inject_citations": true,
+      "chunk_size": 1400,
+      "chunk_overlap": 180,
+      "top_k_retrieval": 10,
+      "top_k_for_generation": 5
+    },
+    "retrieval_metrics": {
+      "recall_at_5": 0.012782391594617044,
+      "recall_at_10": 0.022310397487391883,
+      "mrr": 0.8073646850044366,
+      "ndcg_at_10": 0.5909218456634486,
+      "source_hit_at_5": 0.8757763975155279,
+      "source_hit_at_10": 0.9192546583850931,
+      "capped_recall_at_5": 0.6186335403726704,
+      "capped_recall_at_10": 0.5534161490683228,
+      "precision_at_5": 0.6186335403726704,
+      "precision_at_10": 0.5534161490683228,
+      "num_queries": 161
+    },
+    "qa_metrics": {
+      "em": 0.037267080745341616,
+      "f1": 0.13072479044121932,
+      "rouge_l": 0.17402705155751372,
+      "bleu": 0.025159714025075042,
+      "citation_accuracy": 0.8633540372670807,
+      "source_in_context_rate": 0.8819875776397516,
+      "citation_presence_rate": 1.0,
+      "num_samples": 161
+    },
+    "hallucination_summary": {
+      "total": 150,
+      "faithful_count": 146,
+      "faithful_rate": 0.9733333333333334,
+      "by_category": {
+        "hits": {
+          "total": 50,
+          "faithful": 49
+        },
+        "partial": {
+          "total": 50,
+          "faithful": 50
+        },
+        "misses": {
+          "total": 50,
+          "faithful": 47
+        }
+      },
+      "score_stats": {
+        "mean": 0.8660506556322798,
+        "min": 0.001731811324134469,
+        "max": 0.9796226620674133,
+        "std": 0.12022366831760711
+      }
+    },
+    "faithfulness_rate": 0.9733333333333334,
+    "llm_judge_score": 0.25,
+    "llm_faithfulness_score": 0.9,
+    "llm_relevancy_score": 0.67,
+    "llm_coherence_score": 0.2875,
+    "semantic_similarity": 0.47877422005215786,
+    "scenario1_score": 0.559868,
+    "scenario2_score": 0.23514,
+    "scenario3_score": 0.619167,
+    "perplexity": 8.0293,
+    "ragas_scores": {}
+  },
+  "rrf": {
+    "hyperparameters": {
+      "stage": "rrf",
+      "stage_name": "Stage 1c — RRF",
+      "embedding_model": "BAAI/bge-m3",
+      "retrieval_mode": "rrf",
+      "llm_model": "qwen2.5:14b",
+      "inject_citations": true,
+      "chunk_size": 1400,
+      "chunk_overlap": 180,
+      "top_k_retrieval": 10,
+      "top_k_for_generation": 5
+    },
+    "retrieval_metrics": {
+      "recall_at_5": 0.01391660479962989,
+      "recall_at_10": 0.02345802284642142,
+      "mrr": 0.836887508626639,
+      "ndcg_at_10": 0.6206953390746994,
+      "source_hit_at_5": 0.9503105590062112,
+      "source_hit_at_10": 0.968944099378882,
+      "capped_recall_at_5": 0.6695652173913038,
+      "capped_recall_at_10": 0.5807453416149069,
+      "precision_at_5": 0.6695652173913038,
+      "precision_at_10": 0.5807453416149069,
+      "num_queries": 161
+    },
+    "qa_metrics": {
+      "em": 0.043478260869565216,
+      "f1": 0.1332674216245347,
+      "rouge_l": 0.18075069799667373,
+      "bleu": 0.02521817352391961,
+      "citation_accuracy": 0.9254658385093167,
+      "source_in_context_rate": 0.9565217391304348,
+      "citation_presence_rate": 0.9937888198757764,
+      "num_samples": 161
+    },
+    "hallucination_summary": {
+      "total": 150,
+      "faithful_count": 147,
+      "faithful_rate": 0.98,
+      "by_category": {
+        "hits": {
+          "total": 56,
+          "faithful": 55
+        },
+        "partial": {
+          "total": 39,
+          "faithful": 39
+        },
+        "misses": {
+          "total": 55,
+          "faithful": 53
+        }
+      },
+      "score_stats": {
+        "mean": 0.8722374467055003,
+        "min": 0.29441195726394653,
+        "max": 0.9814037084579468,
+        "std": 0.10165808865405526
+      }
+    },
+    "faithfulness_rate": 0.98,
+    "llm_judge_score": 0.2,
+    "llm_faithfulness_score": 0.86,
+    "llm_relevancy_score": 0.67,
+    "llm_coherence_score": 0.28,
+    "semantic_similarity": 0.4642782612987187,
+    "scenario1_score": 0.561218,
+    "scenario2_score": 0.232571,
+    "scenario3_score": 0.603333,
+    "perplexity": 8.0084,
+    "ragas_scores": {}
+  },
+  "llm_ft": {
+    "hyperparameters": {
+      "stage": "llm_ft",
+      "stage_name": "Stage 4 — Fine-tuned LLM",
+      "embedding_model": "BAAI/bge-m3",
+      "retrieval_mode": "dense",
+      "llm_model": "qwen25-legal-ft",
+      "inject_citations": true,
+      "chunk_size": 1400,
+      "chunk_overlap": 180,
+      "top_k_retrieval": 10,
+      "top_k_for_generation": 5
+    },
+    "retrieval_metrics": {
+      "recall_at_5": 0.01355480481154056,
+      "recall_at_10": 0.024507816342829388,
+      "mrr": 0.843293404318249,
+      "ndcg_at_10": 0.634900673496398,
+      "source_hit_at_5": 0.9192546583850931,
+      "source_hit_at_10": 0.9813664596273292,
+      "capped_recall_at_5": 0.6633540372670803,
+      "capped_recall_at_10": 0.6006211180124222,
+      "precision_at_5": 0.6633540372670803,
+      "precision_at_10": 0.6006211180124222,
+      "num_queries": 161
+    },
+    "qa_metrics": {
+      "em": 0.0,
+      "f1": 0.04116893067726352,
+      "rouge_l": 0.07938161996184125,
+      "bleu": 0.002475674918218204,
+      "citation_accuracy": 0.8571428571428571,
+      "source_in_context_rate": 0.9254658385093167,
+      "citation_presence_rate": 0.9565217391304348,
+      "num_samples": 161
+    },
+    "hallucination_summary": {
+      "total": 150,
+      "faithful_count": 146,
+      "faithful_rate": 0.9733333333333334,
+      "by_category": {
+        "hits": {
+          "total": 50,
+          "faithful": 50
+        },
+        "partial": {
+          "total": 50,
+          "faithful": 49
+        },
+        "misses": {
+          "total": 50,
+          "faithful": 47
+        }
+      },
+      "score_stats": {
+        "mean": 0.8269954068462054,
+        "min": 0.14380761981010437,
+        "max": 0.9739858508110046,
+        "std": 0.13055241180986774
+      }
+    },
+    "faithfulness_rate": 0.9733333333333334,
+    "llm_judge_score": 0.13999999999999999,
+    "llm_faithfulness_score": 0.85,
+    "llm_relevancy_score": 0.615,
+    "llm_coherence_score": 0.22999999999999998,
+    "semantic_similarity": 0.40849878912016474,
+    "scenario1_score": 0.52412,
+    "scenario2_score": 0.151368,
+    "scenario3_score": 0.565,
+    "perplexity": 8.2815,
+    "ragas_scores": {}
+  }
+}
