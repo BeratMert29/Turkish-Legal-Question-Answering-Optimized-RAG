@@ -1,11 +1,9 @@
-import os
 import sys
 from pathlib import Path
 
 _PROJECT_DIR = Path(__file__).parent / "CENG493_Project"
 sys.path.insert(0, str(_PROJECT_DIR))
 
-import json
 import requests
 import pandas as pd
 import plotly.graph_objects as go
@@ -19,19 +17,153 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
-_RESULTS        = Path(__file__).parent / "results" / "stage_results"
-_STAGE1_METRICS = _RESULTS / "stage1" / "baseline_metrics.json"
-_ABLATION_JSON  = _RESULTS / "ablation_summary.json"
+# ── Presentation-aligned result data ──────────────────────────────────────────
+HMGS_RESULTS = [
+    {
+        "Pipeline": "Base RAG",
+        "MRR": 0.8433,
+        "nDCG@10": 0.6349,
+        "Recall@5": 0.0136,
+        "Recall@10": 0.0245,
+        "Source Hit@5": 0.919,
+        "F1": 0.143,
+        "ROUGE-L": 0.187,
+        "Faithfulness": 0.980,
+        "LLM-Judge": 0.2675,
+        "Semantic Sim.": 0.4765,
+        "Scenario 1": 0.5918,
+        "Scenario 2": 0.2433,
+        "Scenario 3": 0.6483,
+    },
+    {
+        "Pipeline": "Hybrid BM25",
+        "MRR": 0.8074,
+        "nDCG@10": 0.5909,
+        "Recall@5": 0.0128,
+        "Recall@10": 0.0223,
+        "Source Hit@5": 0.863,
+        "F1": 0.131,
+        "ROUGE-L": 0.176,
+        "Faithfulness": 0.980,
+        "LLM-Judge": 0.2650,
+        "Semantic Sim.": 0.4709,
+        "Scenario 1": 0.5607,
+        "Scenario 2": 0.2332,
+        "Scenario 3": 0.6275,
+    },
+    {
+        "Pipeline": "RRF",
+        "MRR": 0.8369,
+        "nDCG@10": 0.6207,
+        "Recall@5": 0.0139,
+        "Recall@10": 0.0235,
+        "Source Hit@5": 0.925,
+        "F1": 0.133,
+        "ROUGE-L": 0.181,
+        "Faithfulness": 0.980,
+        "LLM-Judge": 0.2000,
+        "Semantic Sim.": 0.4643,
+        "Scenario 1": 0.5612,
+        "Scenario 2": 0.2326,
+        "Scenario 3": 0.6033,
+    },
+    {
+        "Pipeline": "RRF + Rerank",
+        "MRR": 0.8844,
+        "nDCG@10": 0.6400,
+        "Recall@5": 0.0146,
+        "Recall@10": 0.0235,
+        "Source Hit@5": 0.938,
+        "F1": 0.154,
+        "ROUGE-L": 0.203,
+        "Faithfulness": 0.987,
+        "LLM-Judge": 0.2900,
+        "Semantic Sim.": 0.4802,
+        "Scenario 1": 0.6172,
+        "Scenario 2": 0.2516,
+        "Scenario 3": 0.6442,
+    },
+    {
+        "Pipeline": "FT Embedding",
+        "MRR": 0.8829,
+        "nDCG@10": 0.6730,
+        "Recall@5": 0.0152,
+        "Recall@10": 0.0251,
+        "Source Hit@5": 0.938,
+        "F1": 0.161,
+        "ROUGE-L": 0.211,
+        "Faithfulness": 0.967,
+        "LLM-Judge": 0.2400,
+        "Semantic Sim.": 0.4845,
+        "Scenario 1": 0.6134,
+        "Scenario 2": 0.2581,
+        "Scenario 3": 0.6150,
+    },
+    {
+        "Pipeline": "Full Optimized",
+        "MRR": 0.8829,
+        "nDCG@10": 0.6730,
+        "Recall@5": 0.0152,
+        "Recall@10": 0.0251,
+        "Source Hit@5": 0.888,
+        "F1": 0.051,
+        "ROUGE-L": 0.082,
+        "Faithfulness": 0.940,
+        "LLM-Judge": 0.1150,
+        "Semantic Sim.": 0.4143,
+        "Scenario 1": 0.5631,
+        "Scenario 2": 0.1599,
+        "Scenario 3": 0.6267,
+    },
+]
 
-# ── Stage metadata ────────────────────────────────────────────────────────────
-STAGE_ORDER  = ["stage1", "emb_ft", "llm_ft", "full"]
-STAGE_LABELS = {
-    "stage1": "Stage 1 — Baseline",
-    "emb_ft": "Stage 2 — Emb. Fine-tuned",
-    "llm_ft": "Stage 4 — LLM Fine-tuned",
-    "full":   "Stage 5 — Full Optimized",
-}
+QA300_RESULTS = [
+    {
+        "Pipeline": "FT LLM",
+        "MRR": 0.743,
+        "nDCG@10": 0.493,
+        "Source Hit@5": 0.853,
+        "F1": 0.334,
+        "ROUGE-L": 0.362,
+        "Faithfulness": 0.927,
+        "LLM-Judge": 0.830,
+        "Coherence": 0.923,
+        "Semantic Sim.": 0.679,
+        "Scenario 1": 0.547,
+        "Scenario 2": 0.456,
+        "Scenario 3": 0.798,
+    },
+    {
+        "Pipeline": "FT Embedding",
+        "MRR": 0.870,
+        "nDCG@10": 0.547,
+        "Source Hit@5": 0.937,
+        "F1": 0.265,
+        "ROUGE-L": 0.281,
+        "Faithfulness": 1.000,
+        "LLM-Judge": 0.863,
+        "Coherence": 0.920,
+        "Semantic Sim.": 0.743,
+        "Scenario 1": 0.567,
+        "Scenario 2": 0.409,
+        "Scenario 3": 0.834,
+    },
+    {
+        "Pipeline": "Full Pipeline",
+        "MRR": 0.870,
+        "nDCG@10": 0.547,
+        "Source Hit@5": 0.937,
+        "F1": 0.131,
+        "ROUGE-L": 0.140,
+        "Faithfulness": 0.880,
+        "LLM-Judge": 0.803,
+        "Coherence": 0.925,
+        "Semantic Sim.": 0.680,
+        "Scenario 1": 0.518,
+        "Scenario 2": 0.296,
+        "Scenario 3": 0.838,
+    },
+]
 
 SAMPLE_QUESTIONS = [
     "Türk Medeni Kanunu'na göre evlilik için asgari yaş kaçtır?",
@@ -42,20 +174,8 @@ SAMPLE_QUESTIONS = [
     "Türk Borçlar Kanunu'na göre haksız fiil sorumluluğunun şartları nelerdir?",
 ]
 
-# ── Data loading ──────────────────────────────────────────────────────────────
-@st.cache_data
-def load_metrics() -> dict:
-    stages: dict = {}
-    if _STAGE1_METRICS.exists():
-        with open(_STAGE1_METRICS, encoding="utf-8") as f:
-            stages["stage1"] = json.load(f)
-    if _ABLATION_JSON.exists():
-        with open(_ABLATION_JSON, encoding="utf-8") as f:
-            ablation = json.load(f)
-        for key in ("emb_ft", "llm_ft", "full"):
-            if key in ablation:
-                stages[key] = ablation[key]
-    return stages
+def result_frame(rows: list[dict]) -> pd.DataFrame:
+    return pd.DataFrame(rows)
 
 
 # ── Pipeline loading ──────────────────────────────────────────────────────────
@@ -119,7 +239,7 @@ with tab_demo:
             placeholder="Türkçe hukuki sorunuzu buraya yazın…",
         )
 
-        run = st.button("Get Answer", type="primary", use_container_width=True)
+        run = st.button("Get Answer", type="primary", width="stretch")
 
         ollama_ok = ollama_running()
         if not ollama_ok:
@@ -178,107 +298,167 @@ with tab_demo:
 # TAB 2 — ABLATION RESULTS
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_ablation:
-    stages = load_metrics()
+    hmgs = result_frame(HMGS_RESULTS)
+    qa300 = result_frame(QA300_RESULTS)
 
-    if not stages:
-        st.error("Metrics files not found.")
-        st.stop()
-
-    present = [k for k in STAGE_ORDER if k in stages]
-    xlabels = [STAGE_LABELS[k] for k in present]
-
-    # ── Retrieval metrics ──────────────────────────────────────────────────────
-    st.subheader("Retrieval Metrics")
-    ret_metrics = {
-        "Recall@5":  [stages[k]["retrieval_metrics"].get("recall_at_5",  0) for k in present],
-        "Recall@10": [stages[k]["retrieval_metrics"].get("recall_at_10", 0) for k in present],
-        "MRR":       [stages[k]["retrieval_metrics"].get("mrr",          0) for k in present],
-        "nDCG@10":   [stages[k]["retrieval_metrics"].get("ndcg_at_10",   0) for k in present],
-    }
-    fig_ret = go.Figure()
-    for metric, values in ret_metrics.items():
-        fig_ret.add_trace(go.Bar(
-            name=metric,
-            x=xlabels,
-            y=[round(v, 4) for v in values],
-            text=[f"{v:.3f}" for v in values],
-            textposition="outside",
-        ))
-    fig_ret.update_layout(
-        barmode="group",
-        height=380,
-        yaxis=dict(range=[0, 1.15], title="Score"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        margin=dict(t=30, b=20),
+    st.subheader("Presentation Results")
+    st.caption(
+        "Updated from `CENG493_Presentation.html`: HMGS benchmark, QA-300 ablation, "
+        "and rubric scenario scores."
     )
-    st.plotly_chart(fig_ret, use_container_width=True)
 
-    # ── QA metrics ────────────────────────────────────────────────────────────
-    st.subheader("QA Metrics")
-    qa_metrics = {
-        "F1":               [stages[k]["qa_metrics"].get("f1",                    0) for k in present],
-        "ROUGE-L":          [stages[k]["qa_metrics"].get("rouge_l",               0) for k in present],
-        "BLEU":             [stages[k]["qa_metrics"].get("bleu",                  0) for k in present],
-        "Citation Acc.":    [stages[k]["qa_metrics"].get("citation_accuracy",     0) for k in present],
-        "Citation Present": [stages[k]["qa_metrics"].get("citation_presence_rate",0) for k in present],
-    }
-    fig_qa = go.Figure()
-    for metric, values in qa_metrics.items():
-        fig_qa.add_trace(go.Bar(
-            name=metric,
-            x=xlabels,
-            y=[round(v, 4) for v in values],
-            text=[f"{v:.3f}" for v in values],
-            textposition="outside",
-        ))
-    fig_qa.update_layout(
-        barmode="group",
-        height=380,
-        yaxis=dict(range=[0, 1.35], title="Score"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        margin=dict(t=30, b=20),
+    sub_hmgs, sub_qa300, sub_scenarios = st.tabs(
+        ["HMGS 2025 (161)", "QA-300 Ablation", "Rubric Scenarios"]
     )
-    st.plotly_chart(fig_qa, use_container_width=True)
 
-    # ── Quality / hallucination metrics ───────────────────────────────────────
-    st.subheader("Quality Metrics")
-    qual_cols = st.columns(len(present))
-    for col, k in zip(qual_cols, present):
-        d     = stages[k]
-        faith = d.get("faithfulness_rate") or d.get("hallucination_summary", {}).get("faithful_rate", 0)
-        judge = d.get("llm_judge_score", 0)
-        rel   = d.get("llm_relevancy_score", 0)
-        coh   = d.get("llm_coherence_score", 0)
-        sem   = d.get("semantic_similarity", 0)
-        with col:
-            st.markdown(f"**{STAGE_LABELS[k]}**")
-            st.metric("Faithfulness", f"{faith:.1%}")
-            st.metric("LLM Judge",    f"{judge:.3f}")
-            st.metric("Relevancy",    f"{rel:.3f}")
-            st.metric("Coherence",    f"{coh:.3f}")
-            st.metric("Sem. Sim.",    f"{sem:.3f}")
+    with sub_hmgs:
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("Best MRR", "0.884", "RRF + Rerank")
+        with c2:
+            st.metric("Best F1", "16.1%", "FT Embedding")
+        with c3:
+            st.metric("Best Faithfulness", "98.7%", "RRF + Rerank")
+        with c4:
+            st.metric("Best Source Hit@5", "93.8%", "RRF + Rerank / FT Emb.")
 
-    # ── Summary table ─────────────────────────────────────────────────────────
-    st.subheader("Summary Table")
-    rows = []
-    for k in present:
-        d         = stages[k]
-        hp        = d.get("hyperparameters", {})
-        rm        = d.get("retrieval_metrics", {})
-        qm        = d.get("qa_metrics", {})
-        emb_short = hp.get("embedding_model", "").replace("\\", "/").split("/")[-1]
-        rows.append({
-            "Stage":         STAGE_LABELS[k],
-            "Embedding":     emb_short,
-            "Retrieval":     hp.get("retrieval_mode", ""),
-            "LLM":           hp.get("llm_model", ""),
-            "Recall@5":      round(rm.get("recall_at_5", 0), 3),
-            "MRR":           round(rm.get("mrr",          0), 3),
-            "nDCG@10":       round(rm.get("ndcg_at_10",   0), 3),
-            "F1":            round(qm.get("f1",            0), 3),
-            "Citation Acc.": round(qm.get("citation_accuracy", 0), 3),
-        })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        ret_fig = go.Figure()
+        for metric in ["MRR", "nDCG@10", "Source Hit@5"]:
+            ret_fig.add_trace(
+                go.Bar(
+                    name=metric,
+                    x=hmgs["Pipeline"],
+                    y=hmgs[metric],
+                    text=[f"{v:.3f}" for v in hmgs[metric]],
+                    textposition="outside",
+                )
+            )
+        ret_fig.update_layout(
+            title="Retrieval and Source Grounding",
+            barmode="group",
+            height=390,
+            yaxis=dict(range=[0, 1.08], title="Score"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            margin=dict(t=70, b=20),
+        )
+        st.plotly_chart(ret_fig, width="stretch")
+
+        qa_fig = go.Figure()
+        for metric in ["F1", "ROUGE-L", "Faithfulness", "LLM-Judge", "Semantic Sim."]:
+            qa_fig.add_trace(
+                go.Bar(
+                    name=metric,
+                    x=hmgs["Pipeline"],
+                    y=hmgs[metric],
+                    text=[f"{v:.3f}" for v in hmgs[metric]],
+                    textposition="outside",
+                )
+            )
+        qa_fig.update_layout(
+            title="Answer Quality Metrics",
+            barmode="group",
+            height=390,
+            yaxis=dict(range=[0, 1.12], title="Score"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            margin=dict(t=70, b=20),
+        )
+        st.plotly_chart(qa_fig, width="stretch")
+
+        st.info(
+            "HMGS yorumu: FT Embedding retrieval/semantic metrikleri güçlendirdi. "
+            "Full Optimized retrieval'ı koruyor; ancak HMGS kısa cevap beklediği için "
+            "açıklamalı FT LLM çıktıları F1, ROUGE-L ve LLM-Judge'ı düşürebiliyor."
+        )
+        st.dataframe(hmgs, width="stretch", hide_index=True)
+
+    with sub_qa300:
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("Best F1", "33.4%", "FT LLM")
+        with c2:
+            st.metric("Best MRR", "0.870", "FT Embedding / Full")
+        with c3:
+            st.metric("Best Scenario 3", "0.838", "Full Pipeline")
+
+        fig = go.Figure()
+        for metric in ["MRR", "F1", "ROUGE-L", "Faithfulness", "LLM-Judge", "Semantic Sim."]:
+            fig.add_trace(
+                go.Bar(
+                    name=metric,
+                    x=qa300["Pipeline"],
+                    y=qa300[metric],
+                    text=[f"{v:.3f}" for v in qa300[metric]],
+                    textposition="outside",
+                )
+            )
+        fig.update_layout(
+            title="Fine-Tuning Impact on QA-300",
+            barmode="group",
+            height=420,
+            yaxis=dict(range=[0, 1.12], title="Score"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            margin=dict(t=70, b=20),
+        )
+        st.plotly_chart(fig, width="stretch")
+        st.warning(
+            "Evaluation paradox: n-gram metrics such as F1/ROUGE drop when the model "
+            "answers in a richer explanatory format. Semantic and judge-based metrics "
+            "show a different quality picture."
+        )
+        st.dataframe(qa300, width="stretch", hide_index=True)
+
+    with sub_scenarios:
+        st.markdown(
+            """
+| Scenario | Formula | Evaluation view |
+|---|---|---|
+| **Scenario 1** | `0.35*MRR + 0.40*F1 + 0.25*Faithfulness` | Gold question + answer + document |
+| **Scenario 2** | `0.70*F1 + 0.30*Semantic Similarity` | Gold question + answer |
+| **Scenario 3** | `avg(Relevancy, Faithfulness, Coherence)` | No gold data / LLM-judge view |
+"""
+        )
+
+        fig_hmgs = go.Figure()
+        for metric in ["Scenario 1", "Scenario 2", "Scenario 3"]:
+            fig_hmgs.add_trace(
+                go.Bar(
+                    name=metric,
+                    x=hmgs["Pipeline"],
+                    y=hmgs[metric],
+                    text=[f"{v:.3f}" for v in hmgs[metric]],
+                    textposition="outside",
+                )
+            )
+        fig_hmgs.update_layout(
+            title="HMGS Scenario Scores",
+            barmode="group",
+            height=380,
+            yaxis=dict(range=[0, 0.75], title="Score"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            margin=dict(t=70, b=20),
+        )
+        st.plotly_chart(fig_hmgs, width="stretch")
+
+        fig_qa = go.Figure()
+        for metric in ["Scenario 1", "Scenario 2", "Scenario 3"]:
+            fig_qa.add_trace(
+                go.Bar(
+                    name=metric,
+                    x=qa300["Pipeline"],
+                    y=qa300[metric],
+                    text=[f"{v:.3f}" for v in qa300[metric]],
+                    textposition="outside",
+                )
+            )
+        fig_qa.update_layout(
+            title="QA-300 Scenario Scores",
+            barmode="group",
+            height=380,
+            yaxis=dict(range=[0, 0.95], title="Score"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            margin=dict(t=70, b=20),
+        )
+        st.plotly_chart(fig_qa, width="stretch")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — ARCHITECTURE
