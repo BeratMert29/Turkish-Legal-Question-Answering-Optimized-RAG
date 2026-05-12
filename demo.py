@@ -9,6 +9,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import config
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Turkish Legal RAG — CENG493",
@@ -183,6 +185,8 @@ def result_frame(rows: list[dict]) -> pd.DataFrame:
 def load_pipeline():
     import config
     from retrieval.embedder import Embedder
+    from retrieval.bm25_retriever import BM25Index
+    from retrieval.reranker import Reranker
     from retrieval.retriever import Retriever
     from generation.rag_pipeline import RAGPipeline
 
@@ -194,8 +198,14 @@ def load_pipeline():
         index_path=config.INDEX_DIR / config.INDEX_FILE,
         metadata_path=config.INDEX_DIR / config.METADATA_FILE,
     )
+    bm25 = BM25Index()
+    bm25.build(retriever.metadata)
+
+    reranker = Reranker()
+    reranker.load_model()
+
     pipeline = RAGPipeline(retriever)
-    return pipeline
+    return pipeline, bm25, reranker
 
 
 def ollama_running() -> bool:
@@ -226,15 +236,24 @@ with tab_demo:
     with col_in:
         st.subheader("Ask a Legal Question")
 
+        if "demo_question" not in st.session_state:
+            st.session_state.demo_question = ""
+
+        def apply_sample_question():
+            selected = st.session_state.demo_sample_question
+            if selected != "— type your own —":
+                st.session_state.demo_question = selected
+
         sample = st.selectbox(
             "Sample questions:",
             ["— type your own —"] + SAMPLE_QUESTIONS,
+            key="demo_sample_question",
+            on_change=apply_sample_question,
         )
-        default_text = sample if sample != "— type your own —" else ""
 
         question = st.text_area(
             "Question (Turkish)",
-            value=default_text,
+            key="demo_question",
             height=110,
             placeholder="Türkçe hukuki sorunuzu buraya yazın…",
         )
@@ -251,8 +270,8 @@ with tab_demo:
             st.success("Ollama is online", icon="✅")
 
         st.caption(
-            "The pipeline uses dense FAISS retrieval (BGE-M3) to find relevant legal "
-            "passages, then generates an answer via Qwen 2.5 running locally."
+            "Stage 3 demo: BGE-M3 + FAISS/BM25 RRF retrieval, cross-encoder reranking, "
+            "then Qwen 2.5 running locally."
         )
 
     with col_out:
@@ -262,20 +281,36 @@ with tab_demo:
             else:
                 with st.spinner("Retrieving passages and generating answer…"):
                     try:
-                        pipeline = load_pipeline()
-                        result = pipeline.run(question)
+                        pipeline, bm25, reranker = load_pipeline()
+                        retrieved = pipeline.retriever.batch_rrf_retrieve(
+                            [question],
+                            bm25,
+                            top_k=config.RERANKER_CANDIDATES,
+                        )[0]
+                        reranked = reranker.rerank(
+                            question,
+                            retrieved,
+                            top_k=config.TOP_K_RETRIEVAL,
+                        )
+                        context_used, context_chunks = pipeline.assemble_context(reranked)
+                        answer = pipeline.generate(question, context_used)
 
                         st.subheader("Generated Answer")
-                        st.info(result["answer"])
+                        st.info(answer)
 
-                        st.subheader(f"Retrieved Passages ({len(result['retrieved_chunks'])})")
-                        for i, chunk in enumerate(result["retrieved_chunks"], 1):
+                        st.subheader(f"Retrieved Passages ({len(context_chunks)})")
+                        for i, chunk in enumerate(context_chunks, 1):
                             source  = chunk.get("source", "Unknown")
                             score   = chunk.get("score", 0.0)
                             text    = chunk.get("text", "")
-                            preview = text[:600] + "…" if len(text) > 600 else text
                             with st.expander(f"{i}. {source}  —  score: {score:.4f}"):
-                                st.markdown(f"```\n{preview}\n```")
+                                st.caption(f"Characters: {len(text)}")
+                                st.text_area(
+                                    "Full passage",
+                                    value=text,
+                                    height=320,
+                                    label_visibility="collapsed",
+                                )
                     except Exception as exc:
                         st.error(f"Pipeline error: {exc}")
         elif run:
