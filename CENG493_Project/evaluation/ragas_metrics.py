@@ -1,4 +1,4 @@
-"""RAGAS evaluation metrics using Ollama as LLM + embedding backend."""
+"""RAGAS metrics via Ollama (LLM + embeddings)."""
 import logging
 from typing import Optional
 
@@ -12,15 +12,7 @@ def compute_ragas_metrics(
     ollama_base: str = "http://localhost:11434",
     sample_size: int = 50,
 ) -> Optional[dict]:
-    """
-    Compute RAGAS metrics: faithfulness, answer_relevancy,
-    context_precision, context_recall.
-
-    predictions: list of dicts with keys:
-        question, predicted, expected, retrieved_chunks
-
-    Returns dict with ragas_* keys, or None if ragas not installed.
-    """
+    """Faithfulness, answer_relevancy, context_precision/recall; keys question, predicted, expected, retrieved_chunks. None if ragas missing."""
     try:
         from datasets import Dataset
         from ragas import evaluate
@@ -33,6 +25,12 @@ def compute_ragas_metrics(
         from langchain_ollama import ChatOllama, OllamaEmbeddings
         from ragas.llms import LangchainLLMWrapper
         from ragas.embeddings import LangchainEmbeddingsWrapper
+
+        try:
+            from ragas.metrics import answer_correctness
+            _has_answer_correctness = True
+        except ImportError:
+            _has_answer_correctness = False
     except ImportError as e:
         log.warning("RAGAS dependencies not installed (%s). Run: pip install ragas langchain-ollama", e)
         return None
@@ -66,9 +64,13 @@ def compute_ragas_metrics(
         llm = ChatOllama(model=llm_model, base_url=ollama_base, temperature=0)
         embeddings = OllamaEmbeddings(model=embedding_model, base_url=ollama_base)
 
+        metrics_list = [faithfulness, answer_relevancy, context_precision, context_recall]
+        if _has_answer_correctness:
+            metrics_list.append(answer_correctness)
+
         result = evaluate(
             dataset=dataset,
-            metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
+            metrics=metrics_list,
             llm=LangchainLLMWrapper(llm),
             embeddings=LangchainEmbeddingsWrapper(embeddings),
             raise_exceptions=False,
@@ -92,12 +94,15 @@ def compute_ragas_metrics(
                 return None
             return round(f, 4)
 
-        return {
-            "ragas_faithfulness": _to_float(result["faithfulness"]),
-            "ragas_answer_relevancy": _to_float(result["answer_relevancy"]),
-            "ragas_context_precision": _to_float(result["context_precision"]),
-            "ragas_context_recall": _to_float(result["context_recall"]),
+        out = {
+            "ragas_faithfulness": _to_float(result.get("faithfulness")),
+            "ragas_answer_relevancy": _to_float(result.get("answer_relevancy")),
+            "ragas_context_precision": _to_float(result.get("context_precision")),
+            "ragas_context_recall": _to_float(result.get("context_recall")),
         }
+        if _has_answer_correctness:
+            out["ragas_answer_correctness"] = _to_float(result.get("answer_correctness"))
+        return out
 
     except Exception as exc:
         log.warning("RAGAS evaluation failed: %s", exc)

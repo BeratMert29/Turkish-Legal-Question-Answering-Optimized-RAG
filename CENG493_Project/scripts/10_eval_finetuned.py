@@ -20,9 +20,7 @@ import logging
 from pathlib import Path
 
 
-# ---------------------------------------------------------------------------
 # Project root on sys.path
-# ---------------------------------------------------------------------------
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
@@ -46,10 +44,8 @@ from utils import set_seeds
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
 # Import FinetunedRAGPipeline from scripts/09_load_finetuned_model.py
 # (filename starts with a digit so standard import is not possible)
-# ---------------------------------------------------------------------------
 _script_09_path = _PROJECT_ROOT / "scripts" / "09_load_finetuned_model.py"
 _spec = importlib.util.spec_from_file_location("_load_finetuned_model", _script_09_path)
 _mod = importlib.util.module_from_spec(_spec)
@@ -63,18 +59,14 @@ RETRIEVAL_MODE = "dense_finetuned_llm"
 def main() -> None:
     set_seeds(42)
 
-    # ------------------------------------------------------------------
     # 1. Embedder + index
-    # ------------------------------------------------------------------
     log.info("Loading embedder …")
     embedder = Embedder()
     embedder.load_model()
 
     retriever = load_index(embedder)
 
-    # ------------------------------------------------------------------
     # 2. QA eval set
-    # ------------------------------------------------------------------
     log.info("Loading data from %s …", config.RAW_DATA_PATH)
     processor = DataProcessor(config.RAW_DATA_PATH)
     summary = processor.load_and_validate()
@@ -86,9 +78,7 @@ def main() -> None:
     corpus_chunks = list(processor.build_corpus_chunks())
     log.info("Corpus: %d chunks", len(corpus_chunks))
 
-    # ------------------------------------------------------------------
     # 3. Fine-tuned pipeline
-    # ------------------------------------------------------------------
     log.info("Instantiating FinetunedRAGPipeline …")
     pipeline = FinetunedRAGPipeline(retriever=retriever)
 
@@ -96,15 +86,11 @@ def main() -> None:
     pipeline.load_model()
     log.info("Model loaded.")
 
-    # ------------------------------------------------------------------
     # 4. Retrieval eval (dense, no rerank — same index used for generation)
-    # ------------------------------------------------------------------
     log.info("Running retrieval evaluation …")
     retrieval_metrics, _ = run_retrieval_eval(retriever, qa_examples, corpus_chunks)
 
-    # ------------------------------------------------------------------
     # 5. Generation eval
-    # ------------------------------------------------------------------
     qa_metrics, predictions = run_generation_eval(pipeline, qa_examples)
 
     # Citation injection — append [Kaynak N] markers via token-overlap
@@ -116,14 +102,10 @@ def main() -> None:
             )
     qa_metrics = compute_all_qa_metrics_with_citation(predictions)
 
-    # ------------------------------------------------------------------
     # 6. Hallucination eval
-    # ------------------------------------------------------------------
     hallucination = run_hallucination_eval(predictions)
 
-    # ------------------------------------------------------------------
     # 7. LLM Judge + Semantic Similarity + Final Scenario Scores
-    # ------------------------------------------------------------------
     faithful_rate = hallucination.get("summary", {}).get("faithful_rate", 0.0)
 
     log.info("Running LLM Judge (sample=20) …")
@@ -181,9 +163,7 @@ def main() -> None:
              scenario_scores["scenario1"], scenario_scores["scenario2"],
              scenario_scores["scenario3"])
 
-    # ------------------------------------------------------------------
     # 8. Assemble final_results (same structure as run_baseline.py main())
-    # ------------------------------------------------------------------
     final_results = {
         "hyperparameters": {
             "embedding_model": config.EMBEDDING_MODEL,
@@ -213,9 +193,7 @@ def main() -> None:
         "scenario3_score": scenario_scores["scenario3"],
     }
 
-    # ------------------------------------------------------------------
     # 9. Save results
-    # ------------------------------------------------------------------
     save_results(final_results, RESULTS_DIR)
     log.info("Done. Results written to %s/baseline_metrics.json", RESULTS_DIR)
 

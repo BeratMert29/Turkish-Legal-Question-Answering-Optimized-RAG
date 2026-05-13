@@ -6,7 +6,7 @@ import config
 
 @runtime_checkable
 class EmbedderProtocol(Protocol):
-    """Interface contract for embedding models. Implement this to swap embedders in Stage 2."""
+    """Protocol for swapping embedders."""
     def load_model(self) -> None: ...
     def encode(self, texts: list[str], is_query: bool = False,
                show_progress: bool = True) -> "np.ndarray": ...
@@ -25,7 +25,7 @@ class Embedder:
             else:
                 device = "cpu"
         self.device = device
-        self.model = None  # loaded lazily via load_model()
+        self.model = None
 
     def load_model(self) -> None:
         """Load SentenceTransformer model onto device."""
@@ -33,12 +33,7 @@ class Embedder:
 
     def encode(self, texts: list[str], is_query: bool = False,
                show_progress: bool = True) -> np.ndarray:
-        """
-        Applies E5 query/passage prefixes only for E5 models; BGE-M3 and others receive raw text.
-        is_query=True  → prepends "query: " (E5 only)
-        is_query=False → prepends "passage: " (E5 only)
-        Returns (N, 1024) float32, explicitly L2-normalized.
-        """
+        """E5: query:/passage: prefix; else raw. L2-normalized float32 (N, dim)."""
         if self.model is None:
             raise RuntimeError("Call load_model() before encode()")
         if "e5" in self.model_name.lower():
@@ -61,13 +56,7 @@ class Embedder:
 
 
 class BGEM3Embedder:
-    """
-    BGE-M3 multi-vector embedder using FlagEmbedding.
-    Supports dense, sparse (lexical), and ColBERT (multi-vector) retrieval modes simultaneously.
-    Requires: pip install FlagEmbedding
-
-    VRAM usage: ~3GB with use_fp16=True on RTX 4070 Super (12GB).
-    """
+    """BGE-M3 via FlagEmbedding (dense/sparse/ColBERT). pip install FlagEmbedding."""
 
     def __init__(self, model_name: str = None, batch_size: int = None, device: str = None):
         self.model_name = model_name or config.EMBEDDING_MODEL
@@ -80,10 +69,10 @@ class BGEM3Embedder:
             else:
                 device = "cpu"
         self.device = device
-        self.model = None  # loaded lazily via load_model()
+        self.model = None
 
     def load_model(self) -> None:
-        """Load BGEM3FlagModel with fp16 for VRAM efficiency (~3GB)."""
+        """Load BGEM3FlagModel (fp16)."""
         try:
             from FlagEmbedding import BGEM3FlagModel
         except ImportError:
@@ -110,7 +99,7 @@ class BGEM3Embedder:
         out = self.model.encode(
             texts,
             batch_size=self.batch_size,
-            max_length=512,
+            max_length=1024,
             return_dense=True,
             return_sparse=False,
             return_colbert_vecs=False,
@@ -125,7 +114,7 @@ class BGEM3Embedder:
         out = self.model.encode(
             texts,
             batch_size=self.batch_size,
-            max_length=512,
+            max_length=1024,
             return_dense=False,
             return_sparse=True,
             return_colbert_vecs=False,
@@ -140,7 +129,7 @@ class BGEM3Embedder:
         out = self.model.encode(
             texts,
             batch_size=self.batch_size,
-            max_length=512,
+            max_length=1024,
             return_dense=False,
             return_sparse=False,
             return_colbert_vecs=True,
@@ -165,7 +154,7 @@ class BGEM3Embedder:
         out = self.model.encode(
             texts,
             batch_size=self.batch_size,
-            max_length=512,
+            max_length=1024,
             return_dense=True,
             return_sparse=True,
             return_colbert_vecs=True,

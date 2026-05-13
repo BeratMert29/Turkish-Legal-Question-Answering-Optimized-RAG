@@ -32,7 +32,6 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 import config
 
-# ── Paths ──────────────────────────────────────────────────────────────────
 ADAPTER_DIR    = config.BASE_DIR / "models" / "qwen25_lora"
 MERGED_DIR     = config.BASE_DIR / "models" / "qwen25_merged"
 GGUF_PATH      = config.BASE_DIR / "models" / "qwen25_merged.gguf"
@@ -67,9 +66,7 @@ def _step(n: int, title: str) -> None:
     print(f"\n{'='*66}\n  ADIM {n}: {title}\n{'='*66}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Step 1 — merge LoRA into base model
-# ─────────────────────────────────────────────────────────────────────────────
 def merge_adapter(dry_run: bool) -> None:
     _step(1, "LoRA adaptörünü base model ile birleştir")
     hf_base_model = _base_model_id()
@@ -119,9 +116,7 @@ def merge_adapter(dry_run: bool) -> None:
     print("  ✓ Merge complete.")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Step 2 — convert to GGUF
-# ─────────────────────────────────────────────────────────────────────────────
 def _find_or_clone_llama_cpp() -> Path:
     """Return path to llama.cpp repo root, cloning it if necessary."""
     candidates = [
@@ -178,9 +173,7 @@ def convert_to_gguf(dry_run: bool) -> None:
     print(f"  ✓ GGUF saved: {GGUF_PATH}  ({size_gb:.2f} GB)")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Step 3 — write Modelfile
-# ─────────────────────────────────────────────────────────────────────────────
 def write_modelfile() -> None:
     _step(3, "Ollama Modelfile oluştur")
     content = (
@@ -201,9 +194,7 @@ def write_modelfile() -> None:
     print(f"\n{content}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Step 4 — register with Ollama
-# ─────────────────────────────────────────────────────────────────────────────
 def register_with_ollama(dry_run: bool) -> None:
     _step(4, f"Ollama'ya kaydet → {OLLAMA_NAME}")
 
@@ -227,7 +218,6 @@ def register_with_ollama(dry_run: bool) -> None:
     print(f"  Test: ollama run {OLLAMA_NAME} \"Mülkiyet hakkı nedir?\"")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 def main() -> None:
     p = argparse.ArgumentParser(
         description="Export fine-tuned LoRA adapter to Ollama (GGUF format)."

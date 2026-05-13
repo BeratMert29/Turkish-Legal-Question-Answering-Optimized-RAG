@@ -53,6 +53,19 @@ def main():
     retriever.save_index(index_path, metadata_path)
     print(f"\n  Index saved: {index_path}")
     print(f"  Metadata saved: {metadata_path}")
+
+    graph_output = config.INDEX_DIR / getattr(config, "GRAPH_FILE", "graph.json")
+    print(f"\nBuilding cross-reference graph -> {graph_output}")
+    try:
+        from retrieval.graph_builder import build_graph_from_metadata, save_graph, graph_stats
+        graph = build_graph_from_metadata(metadata)
+        save_graph(graph, graph_output)
+        stats = graph_stats(graph)
+        print(f"  Graph: {stats['total_nodes']} nodes, {stats['total_edges']} edges")
+        print(f"  By kind: {stats['by_kind']}")
+    except Exception as exc:
+        print(f"  WARNING: Graph build failed ({exc}); skipping. Run scripts/15_build_graph.py manually.")
+
     print("\n✓ Index built")
 
 if __name__ == '__main__':

@@ -2,12 +2,13 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 
-# Chunking
 CHUNK_SIZE = 1400
 CHUNK_OVERLAP = 180
 CORPUS_DOC_MIN_CHARS = 180
 
-# Data
+ARTICLE_CHUNKING_ENABLED = True
+ARTICLE_REGEX = r'(?=(?:MADDE|Madde)\s+\d+)'
+
 QA_EVAL_EXPECTED = 300
 QA_GOLD_FILE = "qa_eval.jsonl"
 RAW_DATA_PATH = BASE_DIR.parent / "combined_dataset.csv"
@@ -22,21 +23,17 @@ RESULTS_DIR_RERANK   = BASE_DIR / "results" / "stage_reranker"
 RESULTS_DIR_LLM_FT   = BASE_DIR / "results" / "stage_llm_finetuned"
 RESULTS_DIR_FULL     = BASE_DIR / "results" / "stage_full_optimized"
 
-# HMGS gold test set
 HMGS_DATA_PATH = BASE_DIR.parent / "hmgs_2025_240_only_correct_answers_v2.csv"
 HMGS_GOLD_FILE = "qa_hmgs.jsonl"
 LLM_SHORT_ANSWER_MAX_TOKENS = 64
 
-# HMGS kaynak -> corpus source name mapping (only laws present in corpus)
 HMGS_SOURCE_MAP = {
-    # Original corpus laws
     "1982 Anayasası":                     "Türkiye Cumhuriyeti Anayasası",
     "4721 sayılı Türk Medeni Kanunu":     "Türk Medeni Kanunu",
     "5237 sayılı Türk Ceza Kanunu":       "Türk Ceza Kanunu",
     "5271 sayılı Ceza Muhakemesi Kanunu": "Ceza Muhakemesi Kanunu",
     "6098 sayılı Türk Borçlar Kanunu":    "Türk Borçlar Kanunu",
     "4857 sayılı İş Kanunu":              "Türkiye Cumhuriyeti İş Kanunu",
-    # Supplementary laws (extra_laws.jsonl)
     "6100 sayılı Hukuk Muhakemeleri Kanunu": "Hukuk Muhakemeleri Kanunu",
     "6102 sayılı Türk Ticaret Kanunu":       "Türk Ticaret Kanunu",
     "2577 sayılı İdari Yargılama Usulü Kanunu": "İdari Yargılama Usulü Kanunu",
@@ -44,43 +41,45 @@ HMGS_SOURCE_MAP = {
     "213 sayılı Vergi Usul Kanunu":          "Vergi Usul Kanunu",
     "657 sayılı Devlet Memurları Kanunu":    "Devlet Memurları Kanunu",
 }
-HMGS_EVAL_EXPECTED = 161  # 240 raw - 49 no corpus - 5 VUK (misattributed) - 25 MC-ref
+HMGS_EVAL_EXPECTED = 161
 
-# Embedding
 EMBEDDING_MODEL = "BAAI/bge-m3"
 FINETUNED_EMBEDDING_MODEL = str(BASE_DIR / "models" / "bge-m3-turkish-legal")
 HF_PERPLEXITY_MODEL = "Qwen/Qwen2.5-3B-Instruct"
 EMBEDDING_DIM = 1024
-EMBEDDING_BATCH_SIZE = 32
+EMBEDDING_BATCH_SIZE = 8
 
-# Retrieval
 TOP_K_RETRIEVAL = 10
 TOP_K_FOR_GENERATION = 5
 CONTEXT_WINDOW_CHARS = 14000
 
-# Re-ranker (Stage 2 retrieval)
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
-RERANKER_CANDIDATES = 10   # initial dense/RRF pool before cross-encoder re-ranking
-RRF_K = 60                 # RRF smoothing constant
+RERANKER_CANDIDATES = 10
+RRF_K = 60
 
-# LLM (Ollama — free, no API key)
 LLM_MODEL = "qwen2.5:14b"
-LLM_FINETUNED_MODEL = "qwen25-legal-ft"   # created by scripts/13_export_lora_to_ollama.py
+LLM_FINETUNED_MODEL = "qwen25-legal-ft"
 LLM_BASE_URL = "http://localhost:11434/v1"
 LLM_API_KEY = "ollama"
 LLM_TEMPERATURE = 0.0
 LLM_MAX_TOKENS = 512
-LLM_FINETUNED_MAX_TOKENS = 256  # shorter cap for fine-tuned model to reduce runaway generation
+LLM_FINETUNED_MAX_TOKENS = 256
 
-# Evaluation
+CORPUS_EVAL_HOLDOUT_RATIO = 0.2
+KAGGLE_MIN_SCORE = 6
+
 HALLUCINATION_SAMPLE_SIZE = 150
 
-# Hallucination stratification thresholds (applied to top-1 retrieval score)
 HALLUCINATION_HIT_THRESHOLD = 0.7
 HALLUCINATION_PARTIAL_THRESHOLD = 0.4
 
-# BM25 tokenization
 BM25_MIN_TOKEN_LENGTH = 2
 
-# Oracle relevance (scripts/03_evaluate_retrieval.py)
 TOP_K_ORACLE = 5
+
+GRAPH_FILE = "graph.json"
+GRAPH_EXPANSION_ENABLED = False
+GRAPH_HOPS = 1
+GRAPH_NEIGHBOR_BUDGET = 3
+GRAPH_EDGE_KINDS = ("adj", "intra", "cross")
+GRAPH_DECAY = {"adj": 0.85, "intra": 0.70, "cross": 0.60}
