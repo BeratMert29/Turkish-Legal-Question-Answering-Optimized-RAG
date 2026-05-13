@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""scripts/12_finetune_embeddings.py -- Fine-tune BGE-M3 on Turkish legal triplets.
-
-Uses sentence-transformers SentenceTransformerTrainer with MultipleNegativesRankingLoss
-(InfoNCE-style contrastive loss). Hard negatives from the triplet file are passed as
-additional dataset columns (negative_0 ... negative_6) so the loss can treat them as
-in-batch hard negatives in addition to the other anchors in the batch.
-
-Prerequisites:
-  - Run scripts/11_build_embedding_triplets.py first to generate the triplet file.
-  - pip install "sentence-transformers>=3.0" datasets torch
-
-Output:
-  models/bge-m3-turkish-legal/   -- saved SentenceTransformer (safe-tensors + tokenizer)
-  models/bge-m3-turkish-legal/training_config.json  -- hyperparameters for reproducibility
-"""
+"""Fine-tune BGE-M3 on legal triplets (MNRL). Needs 11_build_embedding_triplets + sentence-transformers."""
 import json
 import os
 import sys
@@ -27,7 +13,6 @@ if _project_root not in sys.path:
 
 import config
 
-# ── Paths & hyperparameters ──────────────────────────────────────────────────
 MODEL_NAME = "BAAI/bge-m3"
 OUTPUT_DIR = config.BASE_DIR / "models" / "bge-m3-turkish-legal"
 TRIPLET_FILE = config.PROCESSED_DIR / "embedding_triplets.jsonl"
@@ -70,7 +55,6 @@ def main() -> None:
         print("Install with:  pip install 'sentence-transformers>=3.0' datasets")
         sys.exit(1)
 
-    # ── Load triplets ────────────────────────────────────────────────────────
     if not TRIPLET_FILE.exists():
         print(f"ERROR: triplet file not found at {TRIPLET_FILE}")
         print("Run scripts/11_build_embedding_triplets.py first.")
@@ -80,7 +64,6 @@ def main() -> None:
     raw = load_jsonl(TRIPLET_FILE)
     print(f"  {len(raw):,} triplets loaded.")
 
-    # ── Build HuggingFace Dataset ────────────────────────────────────────────
     # Build triplets: anchor + positive + first hard negative (if available).
     # MNRL accepts an optional `negative` column alongside anchor and positive.
     records = []
@@ -102,16 +85,13 @@ def main() -> None:
     eval_ds = split["test"]
     print(f"  Train: {len(train_ds):,}  |  Eval: {len(eval_ds):,}")
 
-    # ── Load model ───────────────────────────────────────────────────────────
     print(f"\nLoading {MODEL_NAME} ...")
     model = SentenceTransformer(MODEL_NAME)
 
-    # ── Loss ─────────────────────────────────────────────────────────────────
     # MultipleNegativesRankingLoss uses in-batch negatives (InfoNCE).
     # The extra negative_* columns are treated as additional negatives for each anchor.
     loss = losses.MultipleNegativesRankingLoss(model)
 
-    # ── Training arguments ───────────────────────────────────────────────────
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     args = SentenceTransformerTrainingArguments(
@@ -131,7 +111,6 @@ def main() -> None:
         metric_for_best_model="eval_loss",
     )
 
-    # ── Trainer ──────────────────────────────────────────────────────────────
     trainer = SentenceTransformerTrainer(
         model=model,
         args=args,
@@ -149,7 +128,6 @@ def main() -> None:
 
     trainer.train()
 
-    # ── Save ─────────────────────────────────────────────────────────────────
     print(f"\nSaving fine-tuned model to {OUTPUT_DIR} ...")
     model.save(str(OUTPUT_DIR))
 

@@ -3,7 +3,9 @@ from typing import Iterator
 import hashlib
 import json
 import pathlib
+import re
 
+import numpy as np
 import pandas as pd
 import config
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -19,7 +21,7 @@ _TEXT_SPLITTER = RecursiveCharacterTextSplitter(
 
 @dataclass
 class CorpusChunk:
-    chunk_id: str   # f"{source}_{doc_id}_{chunk_index}"
+    chunk_id: str
     doc_id: str
     text: str
     source: str
@@ -31,7 +33,7 @@ class QAExample:
     query_id: str
     question: str
     answer: str
-    context: str    # "" for test/train rows (null in CSV)
+    context: str
     source: str
     data_type: str
 
@@ -41,12 +43,8 @@ class DataProcessor:
         self.csv_path = csv_path
         self._df: pd.DataFrame | None = None
 
-    # ------------------------------------------------------------------
-    # Loading / validation
-    # ------------------------------------------------------------------
-
     def load_and_validate(self) -> dict:
-        """Load CSV, check required columns, return summary dict."""
+        """Load CSV, validate columns, return summary dict."""
         self._df = pd.read_csv(self.csv_path)
 
         if self._df.empty:
@@ -69,34 +67,133 @@ class DataProcessor:
         if self._df is None:
             self.load_and_validate()
 
-    # ------------------------------------------------------------------
-    # Row accessors
-    # ------------------------------------------------------------------
+    def _get_kaggle_corpus_eval_split(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Article-hash based split — an article is EITHER in eval OR in corpus, never both."""
+        if not hasattr(self, "_kaggle_split_cache"):
+            df = self._df[self._df["split"] == "kaggle"].reset_index(drop=True)
+
+            min_score = getattr(config, "KAGGLE_MIN_SCORE", 6)
+            if "score" in df.columns:
+                before = len(df)
+                df = df[pd.to_numeric(df["score"], errors="coerce").fillna(0) >= min_score]
+                df = df.reset_index(drop=True)
+                dropped = before - len(df)
+                if dropped:
+                    import logging
+                    logging.getLogger(__name__).info(
+                        "_get_kaggle_corpus_eval_split: dropped %d rows with score < %d",
+                        dropped, min_score,
+                    )
+
+            # 1. Assign every row to an article bucket by hashing the context text
+            df = df.copy()
+            df["_article_hash"] = df["context"].fillna("").apply(
+                lambda t: hashlib.md5(t.encode("utf-8")).hexdigest()
+            )
+
+            # 2. Collect unique article hashes and shuffle deterministically
+            unique_hashes = sorted(df["_article_hash"].unique())
+            rng = np.random.default_rng(seed=42)
+            rng.shuffle(unique_hashes)
+
+            # 3. Greedily assign article hashes to the eval bucket until we reach n_holdout rows
+            n_holdout = getattr(config, "QA_EVAL_EXPECTED", 300)
+            eval_hashes: set[str] = set()
+            n_eval = 0
+            for h in unique_hashes:
+                if n_eval >= n_holdout:
+                    break
+                eval_hashes.add(h)
+                n_eval += int((df["_article_hash"] == h).sum())
+
+            # 4. Split
+            eval_mask = df["_article_hash"].isin(eval_hashes)
+            eval_df   = df[eval_mask].reset_index(drop=True)
+            corpus_df = df[~eval_mask].reset_index(drop=True)
+
+            # Clean up helper column
+            eval_df   = eval_df.drop(columns=["_article_hash"])
+            corpus_df = corpus_df.drop(columns=["_article_hash"])
+
+            self._kaggle_split_cache = (corpus_df, eval_df)
+        return self._kaggle_split_cache
 
     def get_corpus_rows(self) -> pd.DataFrame:
-        """Rows where split == 'kaggle' (have context)."""
+        """Kaggle rows for FAISS corpus (eval holdout excluded)."""
         self._ensure_loaded()
-        return self._df[self._df["split"] == "kaggle"].reset_index(drop=True)
+        corpus_df, _ = self._get_kaggle_corpus_eval_split()
+        return corpus_df
+
+    def get_eval_only_rows(self) -> pd.DataFrame:
+        """Holdout eval rows (passages not indexed in FAISS)."""
+        self._ensure_loaded()
+        _, eval_df = self._get_kaggle_corpus_eval_split()
+        return eval_df
 
     def get_qa_split(self, split: str) -> pd.DataFrame:
         self._ensure_loaded()
         return self._df[self._df["split"] == split].reset_index(drop=True)
 
-    # ------------------------------------------------------------------
-    # Chunking
-    # ------------------------------------------------------------------
-
     def chunk_text(self, text: str, doc_id: str, source: str) -> list[CorpusChunk]:
-        """Split text into overlapping chunks using sentence-boundary-aware splitting.
-
-        Uses RecursiveCharacterTextSplitter which respects paragraph/sentence
-        boundaries before falling back to hard character limits, producing
-        cleaner chunks than a pure character-offset sliding window.
-        Returns [] for texts shorter than CORPUS_DOC_MIN_CHARS.
-        """
+        """Chunk by article boundaries or RecursiveCharacterTextSplitter."""
         if len(text) < config.CORPUS_DOC_MIN_CHARS:
             return []
 
+        if not getattr(config, 'ARTICLE_CHUNKING_ENABLED', True):
+            return self._char_chunk(text, doc_id, source)
+
+        article_regex = getattr(config, 'ARTICLE_REGEX', r'(?=(?:MADDE|Madde)\s+\d+)')
+        parts = re.split(article_regex, text)
+        parts = [p.strip() for p in parts if p.strip()]
+
+        article_parts = [p for p in parts if re.match(r'(?:MADDE|Madde)\s+\d+', p)]
+        if len(article_parts) < 2:
+            return self._char_chunk(text, doc_id, source)
+
+        chunks: list[CorpusChunk] = []
+
+        for part in parts:
+            madde_match = re.match(r'(?:MADDE|Madde)\s+(\d+)', part)
+            if madde_match:
+                madde_no = madde_match.group(1)
+                base_id = f"m{madde_no}"
+            else:
+                base_id = "pre"
+
+            if len(part) < config.CORPUS_DOC_MIN_CHARS:
+                continue
+
+            if len(part) <= config.CHUNK_SIZE:
+                chunks.append(CorpusChunk(
+                    chunk_id=f"{source}_{doc_id}_{base_id}",
+                    doc_id=doc_id,
+                    text=part,
+                    source=source,
+                    char_len=len(part),
+                ))
+            else:
+                sub_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=config.CHUNK_SIZE,
+                    chunk_overlap=0,
+                    length_function=len,
+                    separators=["\n\n", "\n", ". ", " ", ""],
+                )
+                sub_chunks = sub_splitter.split_text(part)
+                for sub_idx, sub_text in enumerate(sub_chunks):
+                    if len(sub_text) < config.CORPUS_DOC_MIN_CHARS:
+                        continue
+                    chunks.append(CorpusChunk(
+                        chunk_id=f"{source}_{doc_id}_{base_id}_{sub_idx}",
+                        doc_id=doc_id,
+                        text=sub_text,
+                        source=source,
+                        char_len=len(sub_text),
+                    ))
+
+        return chunks
+
+    def _char_chunk(self, text: str, doc_id: str, source: str) -> list[CorpusChunk]:
+        """Fallback: character-window chunking only."""
         raw_chunks = _TEXT_SPLITTER.split_text(text)
         chunks: list[CorpusChunk] = []
         for i, chunk in enumerate(raw_chunks):
@@ -111,18 +208,8 @@ class DataProcessor:
             ))
         return chunks
 
-    # ------------------------------------------------------------------
-    # Corpus builder (generator)
-    # ------------------------------------------------------------------
-
     def build_corpus_chunks(self) -> Iterator[CorpusChunk]:
-        """Generator — yields CorpusChunk objects for every corpus row.
-
-        Deduplicates by text hash so each unique legal passage appears once.
-        build_relevant_chunk_map uses context-hash matching to correctly
-        resolve the canonical chunk even when the query's row was deduplicated.
-        Also loads supplementary law texts from extra_laws.jsonl if present.
-        """
+        """Yield corpus chunks; hash-dedup per text; append extra_laws.jsonl if present."""
         seen_hashes: set[str] = set()
         kept = 0
         skipped = 0
@@ -140,7 +227,6 @@ class DataProcessor:
                 kept += 1
                 yield chunk
 
-        # Load supplementary law texts (HMK, TTK, İYUK, İİK, VUK, DMK, …)
         extra_path = pathlib.Path(config.BASE_DIR) / "data" / "extra_laws.jsonl"
         if extra_path.exists():
             extra_kept = 0
@@ -165,10 +251,6 @@ class DataProcessor:
             print(f"[build_corpus_chunks] extra_laws: +{extra_kept} chunks from supplementary laws")
 
         print(f"[build_corpus_chunks] kept={kept}, skipped={skipped} duplicate chunks")
-
-    # ------------------------------------------------------------------
-    # QA set builders
-    # ------------------------------------------------------------------
 
     def _rows_to_qa_examples(self, df: pd.DataFrame) -> list[QAExample]:
         examples: list[QAExample] = []
@@ -200,36 +282,20 @@ class DataProcessor:
         return examples
 
     def build_qa_eval_set(self) -> list[QAExample]:
-        """Build QA eval set sampled from kaggle split.
-
-        Kaggle rows have question + answer + context + source, enabling
-        model-independent ground-truth relevance mapping via doc_id match.
-        Uses random_state=42 for reproducibility.
-        """
-        df = self.get_corpus_rows()  # split == "kaggle", all rows have source+context
+        """Sample eval QA from holdout rows (not in FAISS)."""
+        df = self.get_eval_only_rows()
         n = min(config.QA_EVAL_EXPECTED, len(df))
         sampled = df.sample(n=n, random_state=42)
         return self._rows_to_qa_examples(sampled)
 
     def build_qa_train_set(self) -> list[QAExample]:
-        """Build QA train set (train split)."""
+        """Train split QA rows."""
         df = self.get_qa_split("train")
         return self._rows_to_qa_examples(df)
 
     @staticmethod
     def build_gold_eval_set(hmgs_path=None) -> list[QAExample]:
-        """Load the HMGS gold test set, filtered to laws present in the corpus.
-
-        Reads the HMGS CSV, maps kaynak names to corpus source names via
-        config.HMGS_SOURCE_MAP, and drops rows whose kaynak has no corpus
-        counterpart (no chunks to retrieve against).
-
-        Args:
-            hmgs_path: Path to the HMGS CSV. Defaults to config.HMGS_DATA_PATH.
-
-        Returns:
-            List of QAExample whose source matches a corpus source.
-        """
+        """HMGS CSV to QAExamples; map kaynak via HMGS_SOURCE_MAP; drop MC refs and noisy VUK."""
         import logging
         log = logging.getLogger(__name__)
 
@@ -244,9 +310,6 @@ class DataProcessor:
 
         import re as _re
 
-        # MC-reference answers reference exam option numbers (e.g. "Yalnız I",
-        # "I, II ve III") that are not present in the truncated question text.
-        # These cannot be evaluated with automatic metrics — always filtered.
         _MC_RE = _re.compile(
             r'^(Yalnız|Sadece)\s+(I{1,3}|IV|V)'
             r'|^(I{1,3}|IV|V)\s*(,\s*(I{1,3}|IV|V))+'
@@ -254,8 +317,6 @@ class DataProcessor:
             _re.IGNORECASE,
         )
 
-        # VUK rows are misattributed (3/5 questions are actually about HMK /
-        # Avukatlık Kanunu) — drop the entire source to avoid noise.
         _DROPPED_SOURCES = {"213 sayılı Vergi Usul Kanunu"}
 
         source_map = getattr(config, "HMGS_SOURCE_MAP", {})
@@ -301,32 +362,12 @@ class DataProcessor:
         )
         return examples
 
-    # ------------------------------------------------------------------
-    # Ground-truth relevance map
-    # ------------------------------------------------------------------
-
     @staticmethod
-    def build_relevant_chunk_map(
-        corpus_chunks: list,          # list[CorpusChunk]
-        qa_examples: list,            # list[QAExample]
-        retriever=None,               # kept for API compatibility, ignored
-    ) -> dict:                        # {query_id: [chunk_id, ...]}
-        """
-        Build ground-truth relevance map using source/doc_id join.
-        Model-independent: does NOT use embeddings to define relevance.
-
-        Strategy (in order):
-        1. Exact source match: qa.source == chunk.source
-        2. doc_id prefix match: chunk.doc_id starts with qa's row id
-        3. Answer substring: chunk.text contains a significant portion of qa.answer
-           (at least 80 chars of the answer appears in the chunk)
-
-        Returns dict mapping query_id -> list of relevant chunk_ids.
-        """
+    def build_relevant_chunk_map(corpus_chunks: list, qa_examples: list, retriever=None) -> dict:
+        """Oracle relevant chunk ids: context-hash, doc_id, answer substring."""
         import logging
         log = logging.getLogger(__name__)
 
-        # Build lookup structures
         hash_to_chunk_ids: dict[str, list[str]] = {}
         by_source: dict[str, list] = {}
         for chunk in corpus_chunks:
@@ -340,16 +381,11 @@ class DataProcessor:
         for qa in qa_examples:
             relevant: list[str] = []
 
-            # Strategy 1: context-hash match — re-chunk qa.context and find
-            # the canonical corpus chunks by text hash.  This correctly handles
-            # the deduplicated corpus: the relevant chunk may be stored under a
-            # different doc_id than qa.query_id if it was first seen in another row.
             if qa.context:
                 for text in _TEXT_SPLITTER.split_text(qa.context):
                     if len(text) >= config.CORPUS_DOC_MIN_CHARS:
                         h = hashlib.md5(text.encode()).hexdigest()
                         relevant.extend(hash_to_chunk_ids.get(h, []))
-                # deduplicate while preserving order
                 seen: set[str] = set()
                 deduped = []
                 for cid in relevant:
@@ -358,22 +394,8 @@ class DataProcessor:
                         deduped.append(cid)
                 relevant = deduped
 
-            # Strategy 2: doc_id match — used when context is empty/missing
             if not relevant:
                 relevant = [c.chunk_id for c in corpus_chunks if c.doc_id == qa.query_id]
-
-            # Strategy 2.5: answer substring match — for gold sets with known answers (e.g. HMGS)
-            # Find chunks that contain a significant portion of the answer text.
-            if not relevant and qa.answer and len(qa.answer) >= 40:
-                answer_lower = qa.answer.lower().strip()
-                search_str = answer_lower[:80] if len(answer_lower) >= 80 else answer_lower
-                candidate_chunks = by_source.get(qa.source, corpus_chunks) if qa.source else corpus_chunks
-                relevant = [c.chunk_id for c in candidate_chunks if search_str in c.text.lower()]
-
-            # Strategy 3: source match — for gold sets without context (e.g. HMGS)
-            # All chunks from the matching law are considered relevant.
-            if not relevant and qa.source:
-                relevant = [c.chunk_id for c in by_source.get(qa.source, [])]
 
             if not relevant:
                 no_match_count += 1
@@ -388,13 +410,9 @@ class DataProcessor:
             )
         return relevant_map
 
-    # ------------------------------------------------------------------
-    # JSONL I/O
-    # ------------------------------------------------------------------
-
     @staticmethod
     def save_jsonl(items, path) -> int:
-        """Write items to a JSONL file.  Creates parent dirs.  Returns count."""
+        """Write JSONL; return row count."""
         p = pathlib.Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         count = 0
@@ -407,9 +425,9 @@ class DataProcessor:
 
     @staticmethod
     def load_jsonl(path) -> list[dict]:
-        """Load a JSONL file and return a list of raw dicts."""
+        """Read JSONL into list of dicts (max 2GB)."""
         p = pathlib.Path(path)
-        MAX_JSONL_BYTES = 2 * 1024 ** 3  # 2 GB
+        MAX_JSONL_BYTES = 2 * 1024 ** 3
         file_size = p.stat().st_size
         if file_size > MAX_JSONL_BYTES:
             raise ValueError(

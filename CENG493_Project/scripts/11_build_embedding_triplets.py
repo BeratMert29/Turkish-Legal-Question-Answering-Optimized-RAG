@@ -22,7 +22,6 @@ import numpy as np
 import config
 from retrieval.embedder import Embedder
 
-# ── Config ───────────────────────────────────────────────────────────────────
 NUM_HARD_NEGATIVES = 7        # target negatives per query
 HARD_NEG_TOP_K = 30           # search pool size for hard negative mining
 MIN_POSITIVE_SCORE = 0.3      # skip query if best chunk similarity is below this
@@ -42,7 +41,6 @@ def load_jsonl(path: Path) -> list[dict]:
 def main() -> None:
     random.seed(RANDOM_SEED)
 
-    # ── Load data ────────────────────────────────────────────────────────────
     print(f"Loading QA pairs from {QA_PATH} ...")
     qa_pairs = load_jsonl(QA_PATH)
     print(f"  {len(qa_pairs)} QA pairs loaded.")
@@ -53,7 +51,6 @@ def main() -> None:
     chunk_ids = [c["chunk_id"] for c in corpus]
     print(f"  {len(corpus)} corpus chunks loaded.")
 
-    # ── Embed corpus ─────────────────────────────────────────────────────────
     print(f"\nLoading embedder ({config.EMBEDDING_MODEL}) ...")
     embedder = Embedder()
     embedder.load_model()
@@ -61,24 +58,20 @@ def main() -> None:
     print(f"Embedding {len(chunk_texts)} corpus chunks ...")
     corpus_embs = embedder.encode(chunk_texts, is_query=False)  # (N, 1024) float32
 
-    # ── Build FAISS index ────────────────────────────────────────────────────
     import faiss
 
     index = faiss.IndexFlatIP(config.EMBEDDING_DIM)
     index.add(corpus_embs.astype(np.float32))
     print(f"  FAISS index built with {index.ntotal} vectors.")
 
-    # ── Embed all questions in one batch ─────────────────────────────────────
     questions = [qa["question"] for qa in qa_pairs]
     print(f"\nEncoding {len(questions)} questions ...")
     q_embs = embedder.encode(questions, is_query=True)  # (M, 1024) float32
 
-    # ── Batch search: retrieve top-HARD_NEG_TOP_K chunks for every question ──
     print(f"Running FAISS search (top_k={HARD_NEG_TOP_K}) ...")
     scores_all, indices_all = index.search(q_embs.astype(np.float32), HARD_NEG_TOP_K)
     print("  Search complete.")
 
-    # ── Build triplets ───────────────────────────────────────────────────────
     all_indices = list(range(len(chunk_texts)))
     triplets: list[dict] = []
     skipped_low_score = 0
@@ -127,7 +120,6 @@ def main() -> None:
             "neg": hard_negs,
         })
 
-    # ── Save output ───────────────────────────────────────────────────────────
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
         for t in triplets:

@@ -1,12 +1,4 @@
-"""
-Stage 1 Baseline Runner
-Usage:
-    python run_baseline.py --build-index --eval
-    python run_baseline.py --retrieval-only
-    python run_baseline.py --hybrid --retrieval-only
-    python run_baseline.py --rerank --retrieval-only
-    python run_baseline.py --eval --results-dir results/stage1
-"""
+"""Baseline: build index, retrieval, optional generation. See argparse help."""
 
 import os, sys
 if sys.platform == "darwin":
@@ -28,7 +20,6 @@ from retrieval.retriever import Retriever
 from generation.rag_pipeline import RAGPipeline
 from evaluation.retrieval_metrics import compute_all_metrics
 from evaluation.qa_metrics import compute_all_qa_metrics_with_citation
-from evaluation.hallucination import run_hallucination_analysis, stratified_sample
 from utils import set_seeds, check_ollama
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -84,7 +75,6 @@ def run_retrieval_eval(
 
     questions = [qa.question for qa in qa_examples]
 
-    # Step 1: Initial retrieval
     initial_k = config.RERANKER_CANDIDATES if use_rerank else config.TOP_K_RETRIEVAL
     if use_rrf and bm25_index is not None:
         log.info("Running RRF retrieval on %d queries …", len(qa_examples))
@@ -106,7 +96,6 @@ def run_retrieval_eval(
     retrieval_time = round(time.time() - t0, 2)
     log.info("  Retrieval done in %.1fs", retrieval_time)
 
-    # Step 2: Rerank all candidates (covers dense+rerank, hybrid+rerank, rrf+rerank)
     if use_rerank:
         if reranker is None:
             from retrieval.reranker import Reranker
@@ -189,39 +178,6 @@ def run_generation_eval(
     return metrics, predictions
 
 
-def run_hallucination_eval(predictions: list[dict]) -> dict:
-    try:
-        import torch
-        from sentence_transformers import CrossEncoder
-        log.info("Loading NLI model …")
-        if torch.cuda.is_available():
-            _nli_device = "cuda"
-        elif torch.backends.mps.is_available():
-            _nli_device = "mps"
-        else:
-            _nli_device = "cpu"
-        nli_model = CrossEncoder("cross-encoder/nli-deberta-v3-small", device=_nli_device)
-    except Exception as exc:
-        log.warning("NLI model unavailable (%s); skipping hallucination analysis", exc)
-        return {"summary": {"faithful_rate": None, "skipped": True}, "per_sample": []}
-
-    retrieval_results_dict = {
-        p["query_id"]: p.get("retrieved_chunks", [])
-        for p in predictions
-    }
-    result_list = [
-        {
-            "query_id": p["query_id"],
-            "predicted": p["predicted"],
-            "retrieved_chunks": p.get("retrieved_chunks", []),
-        }
-        for p in predictions
-    ]
-    sample_dict = stratified_sample(result_list, sample_size=config.HALLUCINATION_SAMPLE_SIZE)
-    hallucination_result = run_hallucination_analysis(sample_dict, retrieval_results_dict, nli_model)
-    log.info("Hallucination analysis: %s", hallucination_result["summary"])
-    return hallucination_result
-
 
 def save_results(results: dict, results_dir: Path) -> None:
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -236,7 +192,7 @@ def main() -> None:
     parser.add_argument("--build-index", action="store_true",
                         help="Build FAISS index from corpus (slow; skipped if index exists)")
     parser.add_argument("--eval", action="store_true",
-                        help="Run retrieval + generation + hallucination evaluation")
+                        help="Run retrieval + generation evaluation")
     parser.add_argument("--retrieval-only", action="store_true",
                         help="Run only retrieval metrics (no LLM required)")
     parser.add_argument("--hybrid", action="store_true",
@@ -245,6 +201,8 @@ def main() -> None:
                         help="Apply cross-encoder reranker after dense retrieval")
     parser.add_argument("--rrf", action="store_true",
                         help="Use RRF (Reciprocal Rank Fusion) of BM25+dense instead of linear blend")
+    parser.add_argument("--graph", action="store_true",
+                        help="Enable graph neighbor expansion after retrieval")
     parser.add_argument("--results-dir", type=Path, default=config.RESULTS_DIR,
                         help="Directory to write baseline_metrics.json")
     parser.add_argument(
@@ -256,6 +214,9 @@ def main() -> None:
 
     if args.hybrid and args.rrf:
         parser.error("--hybrid and --rrf are mutually exclusive (both are BM25+dense fusion strategies)")
+
+    if args.graph:
+        config.GRAPH_EXPANSION_ENABLED = True
 
     set_seeds(42)
 
@@ -276,11 +237,21 @@ def main() -> None:
     else:
         retriever = load_index(embedder)
 
+    graph_index = None
+    if args.graph:
+        graph_path = config.INDEX_DIR / getattr(config, "GRAPH_FILE", "graph.json")
+        if graph_path.exists():
+            from retrieval.graph_index import GraphIndex
+            graph_index = GraphIndex(graph_path, config.INDEX_DIR / config.METADATA_FILE)
+            log.info("Graph index loaded: %s", graph_path)
+        else:
+            log.warning("--graph set but graph.json not found at %s; run scripts/15_build_graph.py", graph_path)
+    retriever.graph_index = graph_index
+
     if not args.eval and not args.retrieval_only:
         log.info("--eval not specified; exiting after index step.")
         return
 
-    # BM25 index (built once, used for hybrid retrieval)
     bm25_index = None
     if args.hybrid or args.rrf:
         from retrieval.bm25_retriever import BM25Index
@@ -308,7 +279,6 @@ def main() -> None:
     else:
         retrieval_mode = "dense"
 
-    # --- Load reranker once if needed (shared by retrieval + generation eval) ---
     reranker = None
     if args.rerank:
         from retrieval.reranker import Reranker
@@ -316,7 +286,6 @@ def main() -> None:
         reranker = Reranker()
         reranker.load_model()
 
-    # --- Retrieval metrics ---
     retrieval_metrics, retrieval_results = run_retrieval_eval(
         retriever, qa_examples, corpus_chunks,
         use_hybrid=args.hybrid, use_rerank=args.rerank, bm25_index=bm25_index,
@@ -324,7 +293,6 @@ def main() -> None:
     )
 
     qa_metrics: dict = {}
-    hallucination: dict = {}
 
     if args.eval:
         if not check_ollama(config.LLM_BASE_URL, config.LLM_MODEL):
@@ -340,11 +308,9 @@ def main() -> None:
                 use_hybrid=args.hybrid, use_rerank=args.rerank, bm25_index=bm25_index,
                 use_rrf=args.rrf, reranker=reranker,
             )
-            hallucination = run_hallucination_eval(predictions)
     else:
-        log.info("Skipping generation/hallucination (--retrieval-only mode).")
+        log.info("Skipping generation (--retrieval-only mode).")
 
-    # --- Merge and save ---
     final_results = {
         "hyperparameters": {
             "embedding_model": config.EMBEDDING_MODEL,
@@ -355,15 +321,13 @@ def main() -> None:
             "llm_model": config.LLM_MODEL,
             "llm_temperature": config.LLM_TEMPERATURE,
             "llm_max_tokens": config.LLM_MAX_TOKENS,
-            "hallucination_sample_size": config.HALLUCINATION_SAMPLE_SIZE,
             "retrieval_mode": retrieval_mode,
+            "graph_enabled": args.graph,
             "device": embedder.device,
             "index_build_time_s": index_build_time,
         },
         "retrieval_metrics": retrieval_metrics,
         "qa_metrics": qa_metrics,
-        "hallucination_summary": hallucination.get("summary", {}),
-        "faithfulness_rate": hallucination.get("summary", {}).get("faithful_rate"),
     }
     save_results(final_results, args.results_dir)
 

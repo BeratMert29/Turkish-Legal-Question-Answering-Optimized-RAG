@@ -119,8 +119,8 @@ def main() -> None:
     corpus_chunks = list(processor.build_corpus_chunks())
     print(f"  Corpus chunks: {len(corpus_chunks)}")
 
-    # Combine Kaggle 300 eval + HMGS gold as annotation source
-    kaggle_examples = processor.build_qa_eval_set()
+    # Combine Kaggle training set + HMGS gold as annotation source
+    kaggle_examples = processor.build_qa_train_set()
     try:
         hmgs_examples = DataProcessor.build_gold_eval_set()
     except Exception as e:
@@ -129,7 +129,7 @@ def main() -> None:
 
     qa_examples = kaggle_examples + hmgs_examples
     print(f"  QA examples  : {len(qa_examples)} "
-          f"(kaggle={len(kaggle_examples)}, hmgs={len(hmgs_examples)})")
+          f"(train={len(kaggle_examples)}, hmgs={len(hmgs_examples)})")
 
     index_path = config.INDEX_DIR / config.INDEX_FILE
     metadata_path = config.INDEX_DIR / config.METADATA_FILE

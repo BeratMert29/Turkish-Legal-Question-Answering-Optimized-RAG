@@ -1,38 +1,12 @@
 #!/usr/bin/env python3
-"""
-14_eval_all_stages.py — Full Ablation Evaluation (All Stages)
-
-Runs every pipeline configuration through Ollama (no Transformers inference)
-and prints a comparative ablation table at the end.
-
-Prerequisites:
-  - Ollama running: ollama serve
-  - Base model pulled: ollama pull qwen2.5:7b
-  - Fine-tuned LLM (optional): python scripts/13_export_lora_to_ollama.py
-  - Fine-tuned embedding (optional): python scripts/12_finetune_embeddings.py
-
-Usage:
-    python scripts/14_eval_all_stages.py                           # all available stages
-    python scripts/14_eval_all_stages.py --stages base,rrf_rerank,llm_ft
-    python scripts/14_eval_all_stages.py --stages base --dataset hmgs
-    python scripts/14_eval_all_stages.py --list-stages
-
-Available stages:
-    base         BGE-M3 base    + dense          + qwen2.5:7b
-    hybrid       BGE-M3 base    + hybrid BM25    + qwen2.5:7b
-    rrf          BGE-M3 base    + RRF            + qwen2.5:7b
-    rrf_rerank   BGE-M3 base    + RRF+rerank     + qwen2.5:7b   ← best retrieval
-    llm_ft       BGE-M3 base    + dense          + qwen25-legal-ft (fine-tuned)
-    emb_ft       BGE-M3 ft*     + RRF+rerank     + qwen2.5:7b   ← requires emb training
-    full         BGE-M3 ft*     + RRF+rerank     + qwen25-legal-ft  ← best overall
-"""
+"""Run ablation stages (Ollama) and print comparison table. See --list-stages."""
 
 import argparse
 import json
 import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -46,20 +20,13 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 import config
 from data.data_processor import DataProcessor
-from evaluation.hallucination import run_hallucination_analysis, stratified_sample
 from evaluation.qa_metrics import compute_all_qa_metrics_with_citation
 from evaluation.retrieval_metrics import compute_all_metrics
-from evaluation.llm_judge import (
-    llm_judge_answer,
-    llm_judge_faithfulness,
-    llm_judge_relevancy,
-    llm_judge_coherence,
-)
 from evaluation.semantic_similarity import compute_semantic_similarity
 from evaluation.final_score import compute_all_scenario_scores
 from evaluation.perplexity import compute_perplexity
 from evaluation.ragas_metrics import compute_ragas_metrics
-from generation.rag_pipeline import RAGPipeline, TURKISH_PROMPT, SHORT_ANSWER_PROMPT
+from generation.rag_pipeline import RAGPipeline
 from retrieval.bm25_retriever import BM25Index
 from retrieval.embedder import Embedder
 from retrieval.reranker import Reranker
@@ -67,20 +34,17 @@ from retrieval.retriever import Retriever
 from utils import check_ollama, inject_citations, set_seeds
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Stage configuration
-# ─────────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class StageConfig:
-    name: str                        # human-readable label for the ablation table
-    embedding: str                   # "base" | "finetuned"
-    retrieval: str                   # "dense" | "hybrid" | "rrf"
-    use_rerank: bool                 # apply cross-encoder reranker
-    llm: str                         # "base" | "finetuned"
+    name: str
+    embedding: str
+    retrieval: str
+    use_rerank: bool
+    llm: str
     results_dir: Path
-    inject_citations: bool = False   # post-hoc citation injection (for ft LLM)
-    requires_emb_ft: bool = False    # skip automatically if emb model dir is empty
+    inject_citations: bool = False
+    requires_emb_ft: bool = False
+    use_graph: bool = False
 
 
 STAGE_REGISTRY: dict[str, StageConfig] = {
@@ -149,15 +113,31 @@ STAGE_REGISTRY: dict[str, StageConfig] = {
         results_dir=config.RESULTS_DIR_FULL,
         requires_emb_ft=True,
     ),
+    "graph": StageConfig(
+        name="Stage 6 — RRF + Rerank + Graph",
+        embedding="base",
+        retrieval="rrf",
+        use_rerank=True,
+        llm="base",
+        use_graph=True,
+        inject_citations=True,
+        results_dir=config.RESULTS_DIR_BASE / "graph",
+    ),
+    "graph_full": StageConfig(
+        name="Stage 7 — Full + Graph",
+        embedding="finetuned",
+        retrieval="rrf",
+        use_rerank=True,
+        llm="finetuned",
+        use_graph=True,
+        inject_citations=True,
+        results_dir=config.RESULTS_DIR_FULL / "graph",
+        requires_emb_ft=True,
+    ),
 }
 
-# ordered list for display / default run
-DEFAULT_STAGE_ORDER = ["base", "hybrid", "rrf", "rrf_rerank", "llm_ft", "emb_ft", "full"]
+DEFAULT_STAGE_ORDER = ["base", "hybrid", "rrf", "rrf_rerank", "llm_ft", "emb_ft", "full", "graph", "graph_full"]
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Retrieval helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _retrieve(
     retriever: Retriever,
@@ -184,10 +164,6 @@ def _retrieve(
     return chunks
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Run one stage
-# ─────────────────────────────────────────────────────────────────────────────
-
 def run_stage(
     stage_key: str,
     stage: StageConfig,
@@ -207,7 +183,17 @@ def run_stage(
     print(f"  {stage.name}")
     print(f"{'━'*66}")
 
-    # ── Embedding model ────────────────────────────────────────────────────
+    graph_index = None
+    if stage.use_graph and getattr(config, "GRAPH_EXPANSION_ENABLED", False):
+        graph_path = config.INDEX_DIR / getattr(config, "GRAPH_FILE", "graph.json")
+        meta_path = config.INDEX_DIR / config.METADATA_FILE
+        if graph_path.exists():
+            from retrieval.graph_index import GraphIndex
+            graph_index = GraphIndex(graph_path, meta_path)
+            print(f"  Graph index loaded: {graph_path}")
+        else:
+            print(f"  WARNING: graph.json not found at {graph_path}, skipping graph expansion")
+
     emb_key = stage.embedding
     if emb_key not in embedder_cache:
         if emb_key == "finetuned":
@@ -221,11 +207,10 @@ def run_stage(
 
     embedder: Embedder = embedder_cache[emb_key]
 
-    # ── FAISS index (rebuild when embedding changes) ───────────────────────
     idx_key = emb_key
     if idx_key not in retriever_cache:
         print(f"  Building FAISS index ({len(corpus_chunks)} chunks) …")
-        retriever = Retriever(embedder)
+        retriever = Retriever(embedder, graph_index=graph_index)
         texts = [c.text for c in corpus_chunks]
         metadata = [
             {"chunk_id": c.chunk_id, "doc_id": c.doc_id, "text": c.text, "source": c.source}
@@ -238,7 +223,6 @@ def run_stage(
 
     retriever: Retriever = retriever_cache[idx_key]
 
-    # ── BM25 index (shared across all stages that need it) ─────────────────
     needs_bm25 = stage.retrieval in ("hybrid", "rrf")
     bm25: Optional[BM25Index] = None
     if needs_bm25:
@@ -249,7 +233,6 @@ def run_stage(
             bm25_cache["bm25"] = b
         bm25 = bm25_cache["bm25"]
 
-    # ── Reranker (shared) ──────────────────────────────────────────────────
     reranker: Optional[Reranker] = None
     if stage.use_rerank:
         if "reranker" not in reranker_cache:
@@ -259,10 +242,8 @@ def run_stage(
             reranker_cache["reranker"] = r
         reranker = reranker_cache["reranker"]
 
-    # ── LLM selection ──────────────────────────────────────────────────────
     llm_model = config.LLM_FINETUNED_MODEL if stage.llm == "finetuned" else config.LLM_MODEL
 
-    # ── Retrieval metrics ──────────────────────────────────────────────────
     print(f"  Retrieval ({stage.retrieval}, rerank={stage.use_rerank}) …")
     questions = [qa.question for qa in qa_examples]
 
@@ -290,7 +271,6 @@ def run_stage(
           f"MRR={retrieval_metrics.get('mrr',0):.4f}  "
           f"nDCG@10={retrieval_metrics.get('ndcg_at_10',0):.4f}")
 
-    # ── Generation ─────────────────────────────────────────────────────────
     print(f"  Generation with {llm_model} …")
     max_tokens = (
         config.LLM_FINETUNED_MAX_TOKENS if stage.llm == "finetuned"
@@ -338,7 +318,6 @@ def run_stage(
           f"ROUGE-L={qa_metrics.get('rouge_l',0):.4f}  "
           f"Citation={qa_metrics.get('citation_accuracy',0):.4f}")
 
-    # ── Perplexity ────────────────────────────────────────────────────────
     print(f"  Perplexity …")
     try:
         perplexity_score = compute_perplexity(
@@ -355,67 +334,20 @@ def run_stage(
         else:
             print(f"    Perplexity=N/A (logprobs not supported)")
 
-    # ── RAGAS ─────────────────────────────────────────────────────────────
     print(f"  RAGAS metrics …")
     ragas_scores = compute_ragas_metrics(predictions, llm_model=llm_model)
     if ragas_scores:
         print(f"    RAGAS faithfulness={ragas_scores.get('ragas_faithfulness','N/A')}  "
+              f"correctness={ragas_scores.get('ragas_answer_correctness','N/A')}  "
               f"relevancy={ragas_scores.get('ragas_answer_relevancy','N/A')}  "
               f"ctx_precision={ragas_scores.get('ragas_context_precision','N/A')}  "
               f"ctx_recall={ragas_scores.get('ragas_context_recall','N/A')}")
     else:
         print(f"    RAGAS=N/A (install: pip install ragas langchain-ollama)")
 
-    # ── Hallucination ──────────────────────────────────────────────────────
-    print(f"  Hallucination analysis …")
-    import torch
-    from sentence_transformers import CrossEncoder
-    if torch.cuda.is_available():
-        _nli_device = "cuda"
-    elif torch.backends.mps.is_available():
-        _nli_device = "mps"
-    else:
-        _nli_device = "cpu"
-    if not hasattr(run_stage, "_nli_model"):
-        print("    Loading NLI model …")
-        run_stage._nli_model = CrossEncoder("cross-encoder/nli-deberta-v3-small", device=_nli_device)
-    nli_model = run_stage._nli_model  # reuse across stages
+    ragas_faithfulness = (ragas_scores or {}).get("ragas_faithfulness", 0.0) or 0.0
+    faithful_rate = ragas_faithfulness
 
-    sample = stratified_sample(predictions, config.HALLUCINATION_SAMPLE_SIZE)
-    hall = run_hallucination_analysis(sample, full_retrieved, nli_model)
-    faithful_rate = hall["summary"].get("faithful_rate", 0.0)
-    print(f"    Faithfulness={faithful_rate:.4f}")
-
-    # ── LLM Judge (sampled) ───────────────────────────────────────────────
-    print(f"  LLM Judge (sample={min(20, len(predictions))}) …")
-    llm_judge_score = None
-    llm_relevancy_score = None
-    llm_coherence_score = None
-    llm_faithfulness_score = None
-    try:
-        judge_preds = [
-            {**p, "question": next(
-                (qa.question for qa in qa_examples if qa.query_id == p["query_id"]),
-                p.get("query_id", "")
-            )}
-            for p in predictions
-        ]
-        judge_result     = llm_judge_answer(judge_preds, config.LLM_BASE_URL, config.LLM_MODEL, sample_size=20)
-        faith_result     = llm_judge_faithfulness(predictions, config.LLM_BASE_URL, config.LLM_MODEL, sample_size=20)
-        relev_result     = llm_judge_relevancy(judge_preds, config.LLM_BASE_URL, config.LLM_MODEL, sample_size=20)
-        coher_result     = llm_judge_coherence(predictions, config.LLM_BASE_URL, config.LLM_MODEL, sample_size=20)
-        llm_judge_score          = judge_result["score"]
-        llm_faithfulness_score   = faith_result["score"]
-        llm_relevancy_score      = relev_result["score"]
-        llm_coherence_score      = coher_result["score"]
-        print(f"    LLM Judge Answer={llm_judge_score:.4f}  "
-              f"Faith={llm_faithfulness_score:.4f}  "
-              f"Relev={llm_relevancy_score:.4f}  "
-              f"Coher={llm_coherence_score:.4f}")
-    except Exception as exc:
-        print(f"    WARNING: LLM Judge failed: {exc}")
-
-    # ── Semantic Similarity ────────────────────────────────────────────────
     print(f"  Semantic similarity …")
     sem_sim = 0.0
     try:
@@ -425,27 +357,17 @@ def run_stage(
     except Exception as exc:
         print(f"    WARNING: Semantic similarity failed: {exc}")
 
-    # ── Final Scenario Scores ──────────────────────────────────────────────
-    llm_scores_dict = {}
-    if llm_faithfulness_score is not None:
-        llm_scores_dict["faithfulness"] = llm_faithfulness_score
-    if llm_relevancy_score is not None:
-        llm_scores_dict["relevancy"] = llm_relevancy_score
-    if llm_coherence_score is not None:
-        llm_scores_dict["coherence"] = llm_coherence_score
-
     scenario_scores = compute_all_scenario_scores(
         retrieval_metrics=retrieval_metrics,
         qa_metrics=qa_metrics,
         faithfulness_score=faithful_rate,
         semantic_similarity=sem_sim,
-        llm_scores=llm_scores_dict if llm_scores_dict else None,
+        llm_scores=None,
     )
     print(f"    Scenario1={scenario_scores['scenario1']:.4f}  "
           f"Scenario2={scenario_scores['scenario2']:.4f}  "
           f"Scenario3={scenario_scores['scenario3']:.4f}")
 
-    # ── Save ───────────────────────────────────────────────────────────────
     stage.results_dir.mkdir(parents=True, exist_ok=True)
 
     final = {
@@ -458,6 +380,8 @@ def run_stage(
             "retrieval_mode": stage.retrieval + ("_rerank" if stage.use_rerank else ""),
             "llm_model": llm_model,
             "inject_citations": stage.inject_citations,
+            "use_rerank": stage.use_rerank,
+            "use_graph": stage.use_graph,
             "chunk_size": config.CHUNK_SIZE,
             "chunk_overlap": config.CHUNK_OVERLAP,
             "top_k_retrieval": config.TOP_K_RETRIEVAL,
@@ -465,12 +389,7 @@ def run_stage(
         },
         "retrieval_metrics": retrieval_metrics,
         "qa_metrics": qa_metrics,
-        "hallucination_summary": hall.get("summary", {}),
         "faithfulness_rate": faithful_rate,
-        "llm_judge_score": llm_judge_score,
-        "llm_faithfulness_score": llm_faithfulness_score,
-        "llm_relevancy_score": llm_relevancy_score,
-        "llm_coherence_score": llm_coherence_score,
         "semantic_similarity": sem_sim,
         "scenario1_score": scenario_scores["scenario1"],
         "scenario2_score": scenario_scores["scenario2"],
@@ -492,10 +411,6 @@ def run_stage(
     return final
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Ablation table
-# ─────────────────────────────────────────────────────────────────────────────
-
 def print_ablation_table(results: dict[str, dict]) -> None:
     """Print a markdown-compatible ablation table to stdout."""
 
@@ -507,10 +422,10 @@ def print_ablation_table(results: dict[str, dict]) -> None:
 
     header = (
         f"| {'Stage':<26} | {'R@5':>6} | {'R@10':>6} | {'MRR':>6} | "
-        f"{'nDCG@10':>7} | {'F1':>6} | {'ROUGE-L':>7} | {'Citation':>8} | {'Faith.':>7} | "
-        f"{'LLM-J':>6} | {'SemSim':>7} | {'Scen1':>7} | {'Scen2':>7} | {'Scen3':>7} |"
+        f"{'nDCG@10':>7} | {'F1':>6} | {'ROUGE-L':>7} | {'Citation':>8} | "
+        f"{'Faith':>7} | {'SemSim':>7} | {'Scen1':>7} | {'Scen2':>7} | {'Scen3':>7} |"
     )
-    sep = "|" + "|".join(["-"*w for w in [28, 8, 8, 8, 9, 8, 9, 10, 9, 8, 9, 9, 9, 9]]) + "|"
+    sep = "|" + "|".join(["-"*w for w in [28, 8, 8, 8, 9, 8, 9, 10, 9, 9, 9, 9, 9]]) + "|"
 
     print("\n\n" + "="*120)
     print("  ABLATION TABLE")
@@ -531,7 +446,6 @@ def print_ablation_table(results: dict[str, dict]) -> None:
             f"{_f4(ret.get('ndcg_at_10')):>7} | {_pct(qa.get('f1')):>6} | "
             f"{_pct(qa.get('rouge_l')):>7} | {_pct(qa.get('citation_accuracy')):>8} | "
             f"{_pct(r.get('faithfulness_rate')):>7} | "
-            f"{_f4(r.get('llm_judge_score')):>6} | "
             f"{_f4(r.get('semantic_similarity')):>7} | "
             f"{_f4(r.get('scenario1_score')):>7} | "
             f"{_f4(r.get('scenario2_score')):>7} | "
@@ -539,10 +453,6 @@ def print_ablation_table(results: dict[str, dict]) -> None:
         )
     print("="*120 + "\n")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Main
-# ─────────────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -578,7 +488,6 @@ def main() -> None:
 
     set_seeds(42)
 
-    # ── Validate requested stages ──────────────────────────────────────────
     requested = [s.strip() for s in args.stages.split(",") if s.strip()]
     valid = []
     for key in requested:
@@ -594,7 +503,6 @@ def main() -> None:
                       f"  Run: python scripts/12_finetune_embeddings.py first.")
                 continue
         if stage.llm == "finetuned":
-            # Check Ollama has the model
             import subprocess
             result = subprocess.run(["ollama", "list"], capture_output=True, text=True)
             if config.LLM_FINETUNED_MODEL not in result.stdout:
@@ -610,7 +518,6 @@ def main() -> None:
     print(f"\n🚀  Stages to run: {', '.join(valid)}")
     print(f"   Dataset: {args.dataset}\n")
 
-    # ── Check Ollama ───────────────────────────────────────────────────────
     if not check_ollama(config.LLM_BASE_URL, config.LLM_MODEL):
         sys.exit(
             f"ERROR: Ollama not reachable at {config.LLM_BASE_URL}.\n"
@@ -618,7 +525,6 @@ def main() -> None:
             f"  Pull model: ollama pull {config.LLM_MODEL}"
         )
 
-    # ── Load data (shared) ────────────────────────────────────────────────
     short_answer_mode = (args.dataset == "hmgs")
     print("Loading data …")
     processor = DataProcessor(config.RAW_DATA_PATH)
@@ -635,16 +541,13 @@ def main() -> None:
 
     print(f"  Corpus: {len(corpus_chunks)} chunks  |  QA: {len(qa_examples)} examples")
 
-    # ── Ground-truth relevance map (shared) ───────────────────────────────
     relevant_map = DataProcessor.build_relevant_chunk_map(corpus_chunks, qa_examples)
 
-    # ── Shared caches (avoid reloading models between stages) ─────────────
     embedder_cache: dict = {}
     retriever_cache: dict = {}
     bm25_cache: dict = {}
     reranker_cache: dict = {}
 
-    # ── Run stages ─────────────────────────────────────────────────────────
     all_results: dict[str, dict] = {}
 
     for key in valid:
@@ -669,7 +572,6 @@ def main() -> None:
             traceback.print_exc()
             print("  Continuing with next stage …")
 
-    # ── Ablation table ─────────────────────────────────────────────────────
     if all_results:
         print_ablation_table(all_results)
 

@@ -1,9 +1,14 @@
+from __future__ import annotations
+
 import json
 import numpy as np
 import faiss
 from pathlib import Path
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 import config
+
+if TYPE_CHECKING:
+    from retrieval.graph_index import GraphIndex
 
 class RetrievedChunk(TypedDict):
     text: str
@@ -13,10 +18,11 @@ class RetrievedChunk(TypedDict):
     chunk_id: str
 
 class Retriever:
-    def __init__(self, embedder, index_path=None, metadata_path=None):
+    def __init__(self, embedder, index_path=None, metadata_path=None, graph_index=None):
         self.embedder = embedder
         self.index = None
         self.metadata: list[dict] = []
+        self.graph_index = graph_index
         if index_path and metadata_path:
             self.load_index(index_path, metadata_path)
 
@@ -97,6 +103,14 @@ class Retriever:
                     chunk_id=meta.get("chunk_id", ""),
                 ))
             results.append(chunks)
+        if self.graph_index is not None and getattr(config, "GRAPH_EXPANSION_ENABLED", False):
+            results = self.graph_index.expand_batch(
+                results,
+                hops=getattr(config, "GRAPH_HOPS", 1),
+                budget=getattr(config, "GRAPH_NEIGHBOR_BUDGET", 3),
+                kinds=tuple(getattr(config, "GRAPH_EDGE_KINDS", ("adj", "intra", "cross"))),
+                decay=getattr(config, "GRAPH_DECAY", None),
+            )
         return results
 
     def hybrid_retrieve(self, query: str, bm25_index, alpha: float = 0.5,
@@ -207,20 +221,22 @@ class Retriever:
                 score=float(final_scores[i]),
                 chunk_id=self.metadata[i].get("chunk_id", ""),
             ) for i in top_indices])
+        if self.graph_index is not None and getattr(config, "GRAPH_EXPANSION_ENABLED", False):
+            results = self.graph_index.expand_batch(
+                results,
+                hops=getattr(config, "GRAPH_HOPS", 1),
+                budget=getattr(config, "GRAPH_NEIGHBOR_BUDGET", 3),
+                kinds=tuple(getattr(config, "GRAPH_EDGE_KINDS", ("adj", "intra", "cross"))),
+                decay=getattr(config, "GRAPH_DECAY", None),
+            )
         return results
 
-    # ── Reciprocal Rank Fusion ────────────────────────────────────────────
 
     def batch_rrf_retrieve(self, queries: list[str], bm25_index,
                            top_k: int = None,
                            rrf_k: int = None,
                            candidate_pool: int = None) -> list[list[RetrievedChunk]]:
-        """Reciprocal Rank Fusion of dense + BM25 rankings.
-
-        RRF is rank-based so it avoids the score-calibration issues of
-        linear blending. Each document's fused score is:
-            sum_over_lists( 1 / (rrf_k + rank) )
-        """
+        """Fuse dense + BM25 ranks: score = Σ 1/(rrf_k + rank)."""
         if self.index is None:
             raise RuntimeError("Call build_index() or load_index() before using the retriever")
         if top_k is None:
@@ -269,9 +285,16 @@ class Retriever:
                 score=float(rrf_scores[i]),
                 chunk_id=self.metadata[i].get("chunk_id", ""),
             ) for i in top_indices])
+        if self.graph_index is not None and getattr(config, "GRAPH_EXPANSION_ENABLED", False):
+            results = self.graph_index.expand_batch(
+                results,
+                hops=getattr(config, "GRAPH_HOPS", 1),
+                budget=getattr(config, "GRAPH_NEIGHBOR_BUDGET", 3),
+                kinds=tuple(getattr(config, "GRAPH_EDGE_KINDS", ("adj", "intra", "cross"))),
+                decay=getattr(config, "GRAPH_DECAY", None),
+            )
         return results
 
-    # ── BGE-M3 Multi-Vector Retrieval ────────────────────────────────────────
 
     def multi_vector_retrieve(self, query: str, bgem3_embedder,
                               top_k: int = None,
